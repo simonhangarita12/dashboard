@@ -1,6 +1,6 @@
 
 import pandas as pd
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -148,7 +148,8 @@ dic_semana={"Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miercoles",
             "Thursday":"Jueves","Friday":"Viernes","Saturday":"Sabado"
             }
 heat_map_group["dia de la semana"]=heat_map_group.apply(lambda x:dic_semana[x["dia de la semana"]],axis=1)
-
+empresas=filt["Empresa"].unique()
+analistas=filt["Nombre"].unique()
 from dash import html, dcc, State,Input, Output,callback, Dash
 import plotly.express as px
 import pandas as pd 
@@ -157,7 +158,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -218,6 +218,13 @@ layout_analistas=dbc.Container([
                         'padding': '10px'      
                       }
                       ),  
+        ]),
+        dbc.Col([
+            dbc.Select(
+                id="drawdown_analistas",
+                options=analistas,
+                value=analistas[0]
+            ),
         ])
         
     ],class_name="mb-2"),
@@ -264,6 +271,11 @@ layout_empresa=dbc.Container([
                         'padding': '10px'      
                       }
                       ),
+        ]),
+        dbc.Col([
+            dbc.Select(id="drawdown_emp",
+                       options=empresas,
+                       value=empresas[0])
         ])
     ],class_name="mb-2"),
     dbc.Row([
@@ -363,12 +375,129 @@ def plot_map(n_click,year,month,day):
     Output("aumento","children"),
     Output("aumento", "style"),
     Input("boton_analistas", 'n_clicks'),
+    Input("drawdown_analistas","value"),
     [State('empleado_busqueda', 'value'),
      ]
 )
-def plot_graph(nclick,empleado):
+def plot_graph(nclick,emp_draw,empleado):
     if nclick is None:
-        return px.line(),px.bar(),px.scatter(),"Promedio de tiempo en conexiones","45 minutos","+0%",{"color":"black"}
+        aux_plot=filt[filt["Nombre"]==emp_draw]
+        aux_plot=aux_plot[aux_plot["hora de ingreso"]>dt(1991,1,1)]
+        aux_plot["minutos de conexion"]=aux_plot['tiempo conectado'].dt.total_seconds() // 60 + (aux_plot['tiempo conectado'].dt.total_seconds() % 60)/100
+        aux_plot["minutos perdidos"]=aux_plot['tiempo muerto'].dt.total_seconds() // 60+ (aux_plot['tiempo muerto'].dt.total_seconds() % 60)/100
+        aux_plot["minutos perdidos por causa externa"]=aux_plot['tiempo muerto inevitable'].dt.total_seconds() // 60+ (aux_plot['tiempo muerto inevitable'].dt.total_seconds() % 60)/100
+        aux_card=aux_plot[aux_plot["tiempo conectado asistentes"]>timedelta(minutes=10)]
+        aux_plot=aux_plot.sort_values("hora de ingreso")
+        promedio=aux_card["tiempo conectado"].mean()
+        aux_card["year"] =aux_card["hora de ingreso"].dt.year
+        aux_card["numero semana"]=aux_card.apply(lambda x:(x["hora de ingreso"]).isocalendar().week,axis=1)
+        promedio_sem_ant=aux_card[(aux_card["year"]!=aux_card["year"].iloc[-1])|(aux_card["numero semana"]!=aux_card["numero semana"].iloc[-1])]
+        promedio_ant=promedio_sem_ant["tiempo conectado"].mean()
+        promedio_porc=(promedio.total_seconds()-promedio_ant.total_seconds())/promedio_ant.total_seconds()
+        titulo_card="Promedio de tiempo en conexiones de "+ emp_draw
+        promedio_card= str(round(promedio.total_seconds()/60,3)) +" minutos"
+        if promedio_porc>0:
+            aumento_card,style=f"+{round(promedio_porc,3)}%",{"color":"green"}
+        else:
+            aumento_card,style=f"{round(promedio_porc,3)}%",{"color":"red"}
+        por_dia=aux_plot[["hora de ingreso","Empresa","tiempo conectado","tiempo conectado asistentes"]][aux_plot["hora de ingreso"]>dt(year=1991,month=1,day=1)]
+        perdidas=por_dia[por_dia["tiempo conectado asistentes"]<=timedelta(minutes=10)]
+        por_dia=por_dia[por_dia["tiempo conectado"]>timedelta(minutes=10)]
+        por_dia=por_dia[por_dia["tiempo conectado asistentes"]>timedelta(minutes=10)]
+        perdidas["numero de reuniones"]=1
+        perdidas["year"] = perdidas["hora de ingreso"].dt.year
+        perdidas["month"] = perdidas["hora de ingreso"].dt.month
+        perdidas["day"] = perdidas["hora de ingreso"].dt.day
+        perdidas["fecha"] = perdidas.apply(lambda x: dt(x["year"], x["month"], x["day"]), axis=1)
+        perdidas_group=perdidas.groupby("fecha")["numero de reuniones"].sum().reset_index()
+        por_dia["numero de reuniones"]=1
+        por_dia["year"] = por_dia["hora de ingreso"].dt.year
+        por_dia["month"] = por_dia["hora de ingreso"].dt.month
+        por_dia["day"] = por_dia["hora de ingreso"].dt.day
+        por_dia["fecha"] = por_dia.apply(lambda x: dt(x["year"], x["month"], x["day"]), axis=1)
+        por_dia_group=por_dia.groupby(["fecha"])["numero de reuniones"].sum().reset_index()
+        por_dia_group["reunion efectiva"]="Reunión realizada"
+        perdidas_group["reunion efectiva"]="No se unieron a la reunión"
+        por_dia_group=pd.concat([por_dia_group,perdidas_group])
+        por_dia_group=por_dia_group.sort_values("fecha")
+        fig_line=px.line(aux_plot,x="hora de ingreso",
+                         y="minutos de conexion",
+                         hover_data=["Empresa"] ,
+                         labels={"hora de ingreso": "Fecha de conexión", "minutos de conexion": "Minutos conectado"},
+                         title="Tiempo de conexión por reunion de "+str(emp_draw))
+        fig_line.update_traces(
+            hoverlabel=dict(
+            bgcolor="lavender",      
+            font=dict(color="black", size=12)  
+            )
+        )
+        fig_line.update_traces(
+           marker_color="purple" 
+        )
+        x_inf=min(aux_plot["hora de ingreso"])
+        x_sup=max(aux_plot["hora de ingreso"])
+        fig_line.add_shape(
+          type="line",
+          x0=x_inf, y0=45,
+          x1=x_sup, y1=45,
+          line=dict(color="red", width=2, dash="dash")
+        )
+        fig_line.update_layout(
+            xaxis=dict(
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                ),
+                rangeslider=dict(visible=True),
+            )
+        )
+        color_map = {
+            "Reunión realizada": "green",
+            "No se unieron a la reunión": "red"
+        }
+        fig_bar=px.bar(por_dia_group,x="fecha",
+                       y="numero de reuniones",
+                       labels={"fecha": "Día",
+                                "numero de reuniones": "Número de reuniones",
+                                "reunion efectiva":"¿Se realizó la reunión?"},
+                       color="reunion efectiva",
+                       color_discrete_map=color_map,
+                       title="Numero de reuniones por día hechas por "+str(emp_draw))
+        fig_bar.update_traces(
+            hoverlabel=dict(
+            bgcolor="palegreen",     
+            font=dict(color="black", size=12)  
+            )
+        )
+        fig_scatter= px.scatter(aux_plot, x="minutos perdidos", 
+                                y="minutos perdidos por causa externa",
+                                title="Disperción de los tiempos perdidos por reunion",
+                                hover_data=["Empresa","inicio agendado"] ,
+                                labels={"minutos perdidos": "Minutos perdidos", "minutos perdidos por causa externa": "Minutos perdidos por impuntualidad de los asistentes"},
+                                render_mode='webgl')
+        fig_scatter.update_traces(
+            hoverlabel=dict(
+            bgcolor="SkyBlue",     
+            font=dict(color="black", size=12)  
+            )
+        )
+        fig_scatter.update_traces(marker_line=dict(width=1, color='DarkSlateGray'))
+        x_max=max(aux_plot["minutos perdidos"])+1
+        y_max=max(aux_plot["minutos perdidos por causa externa"])+1
+        
+        fig_scatter.add_shape(
+          type="line",
+          x0=0, y0=0,
+          x1=max(x_max,y_max), y1=max(x_max,y_max),
+          line=dict(color="red", width=2, dash="solid")
+        )
+        fig_scatter.update_layout(width=825, height=600)
+        return fig_line, fig_bar, fig_scatter, titulo_card, promedio_card,aumento_card,style
+        #return px.line(),px.bar(),px.scatter(),"Promedio de tiempo en conexiones","45 minutos","+0%",{"color":"black"}
     elif empleado.lower() not in filt["Nombre"].str.lower().unique():
             return px.line(),px.bar(),px.scatter(),"Promedio de tiempo en conexiones","45 minutos","+0%",{"color":"black"}
     else:
@@ -498,11 +627,71 @@ def plot_graph(nclick,empleado):
     Output("tacometro_minutos_retraso","figure"),
     Output("tacometro_tiempo_reuniones","figure"),
     Input("boton_empresas","n_clicks"),
+    Input("drawdown_emp","value"),
     [State("empresa_busqueda","value")]
 )
-def plot_emp(n_click,empresa_selected):
+def plot_emp(n_click,empresa_draw,empresa_selected):
     if n_click is None:
-        return px.scatter(),px.line(),px.line()
+        empresas_prom=filt.groupby(["Empresa"])[["tiempo muerto inevitable","tiempo conectado asistentes"]].mean().reset_index()
+        empresas_prom["tiempo conectado minutos"]=empresas_prom['tiempo conectado asistentes'].dt.total_seconds() // 60+ (empresas_prom['tiempo conectado asistentes'].dt.total_seconds() % 60)/100
+        empresas_sum=filt.groupby(["Empresa"])[["reuniones","tiempo conectado","tiempo conectado asistentes"]].sum().reset_index()
+        empresas_sum["Porcentaje tiempo efectivo"]=empresas_sum.apply(lambda x:round((x["tiempo conectado asistentes"]/x["tiempo conectado"])*100,3) if (x["tiempo conectado"]>x["tiempo conectado asistentes"])else 100, axis=1)
+        recuento_empresas=pd.merge(empresas_prom,empresas_sum,on="Empresa",how="inner")
+        recuento_empresas["inverso tiempo efectivo"]=101-recuento_empresas["Porcentaje tiempo efectivo"]
+        recuento_empresas["tiempo muerto minutos"]=recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() // 60+ (recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() % 60)/100
+        recuento_empresas["color"]=np.where(recuento_empresas["Empresa"]==empresa_draw, "red","blue")
+        fig_scatter_emp=px.scatter(recuento_empresas,
+            x="tiempo muerto minutos",
+            y="reuniones",
+            hover_data=["Empresa"],
+            title="Dispersion del número de reuniones con respecto al tiempo perdido por impuntualidad",
+            size="inverso tiempo efectivo",
+            labels={"tiempo muerto minutos":"Tiempo de retraso promedio",
+                        "reuniones":"Número de reuniones",
+                        "inverso tiempo efectivo":"Porcentaje de tiempo desaprovechado"
+                    },
+            size_max=40,
+            color="color"
+            )
+    
+        fig_tac_pro=go.Figure(
+                go.Indicator(
+                mode="gauge+number",
+                title={'text': "Promedio de tiempo de impuntualidad", 'font': {'size': 24}},
+                value=float(recuento_empresas["tiempo muerto minutos"][recuento_empresas["Empresa"]==empresa_draw]),
+                gauge={
+                  'axis': {'range': [0, 20]},
+                  'steps': [
+                  {'range': [0, 3], 'color': "lightgreen"},
+                  {'range': [3, 5], 'color': "orange"},
+                  {'range': [5, 20], 'color': "red"}
+                  ],
+                  'threshold': {'value': 90}
+                }
+           )
+        )
+        fig_tac_min=go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            title={'text': "Promedio de tiempo conectado", 'font': {'size': 24}},
+            value=float(empresas_prom["tiempo conectado minutos"][empresas_prom["Empresa"]==empresa_draw]),
+            gauge={
+                'axis': {'range': [0, 100]},
+                'steps': [
+                    {'range': [0, 15], 'color': "red"},
+                    {'range': [15, 30], 'color': "orange"},
+                    {'range': [30, 55], 'color': "lightgreen"},
+                    {'range': [55, 100], 'color': "red"}
+                ],
+                'threshold': {'value': 90}
+            }
+        )
+        )
+        fig_scatter_emp.update_layout(width=1200, height=650)
+
+        return fig_scatter_emp,fig_tac_pro,fig_tac_min
+
+         
     def clean(text):
         return re.sub(r"[^a-zA-Z0-9]", "",text).lower()
     empresas=filt["Empresa"].unique()
