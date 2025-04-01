@@ -157,6 +157,7 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
+server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
