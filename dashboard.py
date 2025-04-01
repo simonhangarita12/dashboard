@@ -1,6 +1,6 @@
 
 import pandas as pd
-data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
+data_horas = pd.read_excel('ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
