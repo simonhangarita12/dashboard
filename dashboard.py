@@ -1,6 +1,8 @@
 
 import pandas as pd
-data_horas = pd.read_excel('ensayo.xlsx')
+import warnings
+warnings.filterwarnings("ignore")
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -23,10 +25,54 @@ data_horas = data_horas.rename(columns={
     })
 #eliminamos la primera fila, ya que contiene informacion del excel original, que aqui no es relevante
 data_horas=data_horas.drop([0],axis=0)
-data_horas
-
 #seleccionamos las columnas mas relevantes para el analisis
 filt=data_horas[["Nombre","Numero de participantes","Email","Rol","Empresa","hora de ingreso","duracion planeada","inicio agendado","tiempo conectado"]]
+
+#En esta parte arreglamos un pequeño error en los emails que se nos presenta 
+# para evitar errores futuros en el procesamiento de las columnas
+
+for i in filt.index:  
+    if isinstance(filt.loc[i, "Email"], float):
+        filt.loc[i, "Email"] = "None"
+
+import re
+patron  = r"analista[a-zA-Z0-9_.+-]*@talentoconsultores"
+#utilizamos esta funcion auxiliar para separar los analistas
+def aux_fun_error(email):
+    if re.search(patron, email, re.IGNORECASE):
+        return 1
+    else:
+        return 0
+#creamos una nueva columna temporal asignando el valor en 
+# binario de si es el caso de un analista o no
+filt["Es_analista"]= filt.apply(lambda x:aux_fun_error(x["Email"]),axis=1)
+
+
+#Vamos a eliminar a continuación con el siguiente algoritmo un error
+# que se presenta cuando en una reunion ingresan varios analistas,
+# y en estos casos se pueden llegar a dañar nuestros resultados,
+# porque si el otro analista que ingresa dura mas en la reunion,
+# en verdad estaríamos considerando un tiempo de conexion mucho menor
+# de lo que en verdad fue
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"Rol"]=="Organizer":
+        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
+        if numero_asistentes>1:
+            for j in range(1,numero_asistentes):
+              if filt.loc[i+j+1,"Es_analista"]==1:
+                # En el caso de que el segundo analista hubiera estado conectado por mas tiempo los vamos a cambiar
+                if filt.loc[i+1,"tiempo conectado"]<filt.loc[i+j+1,"tiempo conectado"]:
+                    temp_row = filt.iloc[i].copy()
+                    filt.iloc[i] = filt.iloc[i+j]
+                    filt.iloc[i+j] = temp_row
+                    filt["Rol"].iloc[i]="Organizer"
+                    filt["Rol"].iloc[i+j]="Presenter"
+                    break
+                else: 
+                    continue
+filt=filt.drop(columns=["Es_analista"])
+
+
 #creamos nuevas columnas para obtener posteriormente los tiempos muertos por reunion
 filt["tiempos"]=filt.apply(lambda x: [], axis=1)
 filt["tiempos inevitables"]=filt.apply(lambda x: [], axis=1)
@@ -51,18 +97,12 @@ filt["tiempo de entrada inevitable"]=filt.apply(lambda x:x["tiempos inevitables"
 filt=filt[filt["Rol"]=="Organizer"]
 filt=filt.drop(columns=["Rol"])
 
-#En esta parte arreglamos un pequeño error en los emails que se nos presenta 
-# para evitar errores futuros en el procesamiento de las columnas
-
-for i in filt.index:  
-    if isinstance(filt.loc[i, "Email"], float):
-        filt.loc[i, "Email"] = "None"
 
 #Realizaremos un filtrado de los correos utilizando expresiones regulares 
 # para obtener unicamente los correos de los analistas. 
 # Los cuales siempre inician por analista
 import re
-patron  = r"^analista"
+patron  = r"analista[a-zA-Z0-9_.+-]*@talentoconsultores"
 #utilizamos esta funcion auxiliar para separar los analistas
 def aux_fun(email):
     if re.search(patron, email, re.IGNORECASE):
@@ -124,11 +164,41 @@ filt=filt.drop_duplicates()
 #eliminamos columnas con valores faltantes
 filt=filt.dropna()
 
-#eliminamos las tildes del nombre
+#eliminamos las tildes del nombre de las empresas y los analistas
 import unicodedata
 def quitar_tildes(texto):
     return ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
 filt["Nombre"]=filt.apply(lambda x:quitar_tildes(x["Nombre"]),axis=1)
+filt["Empresa"]=filt.apply(lambda x: quitar_tildes(x["Empresa"]),axis=1)
+filt["Empresa"]=filt.apply(lambda x: x["Empresa"].upper(), axis=1)
+#tratamos por aparte una empresa que nos puede traer problemas 
+# a la hora de eliminar palabras que no aportan al nombre de la empresa
+filt["Empresa"]=filt.apply(lambda x:"ASESORÍA MINERA" if x["Empresa"]=='ASESORIA SST, ASESORIA MINERA' else x["Empresa"],axis=1)
+
+#Eliminamos los terminos que nos aportan poco al nombre de la empresa
+def eliminar_palabras(nombre_empresa):
+    nombre_empresa=nombre_empresa.replace("ASESORIAS","")
+    nombre_empresa=nombre_empresa.replace("ASESORIA","")
+    nombre_empresa=nombre_empresa.replace("SISTEGRA","")
+    nombre_empresa=nombre_empresa.replace("-","")
+    nombre_empresa=nombre_empresa.replace("PESV","")
+    nombre_empresa=nombre_empresa.replace("SST","")
+    nombre_empresa=nombre_empresa.replace(".","")
+    nombre_empresa = " ".join(nombre_empresa.split())
+    return nombre_empresa
+filt["Empresa"]=filt.apply(lambda x:eliminar_palabras(x["Empresa"]),axis=1)
+#Colocamos sin especificar para el nombre de las empresas 
+# que no tenian un nombre significativo
+filt["Empresa"]=filt.apply(lambda x:"Sin especificar" if x["Empresa"]=="" else x["Empresa"],axis=1)
+
+
+#hacemos un poquito de limpieza en los nombres de las empresas 
+# para que sean mas claros y ademas eliminemos facilmente empresas 
+# que no nos aportan información. Como es el caso de las reuniones 
+# donde no aparece el nombre de la empresa y por tanto es informacion 
+# que no nos aporta mucho en las visualizaciones
+filt["Empresa"]=filt.apply(lambda x: x["Empresa"].upper(), axis=1)
+
 #agregamos una variable nueva para hacer recuento de reuniones
 filt["reuniones"]=1
 
@@ -158,7 +228,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
