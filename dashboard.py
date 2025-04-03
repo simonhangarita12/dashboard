@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -27,7 +27,8 @@ data_horas = data_horas.rename(columns={
 data_horas=data_horas.drop([0],axis=0)
 #seleccionamos las columnas mas relevantes para el analisis
 filt=data_horas[["Nombre","Numero de participantes","Email","Rol","Empresa","hora de ingreso","duracion planeada","inicio agendado","tiempo conectado"]]
-
+filt=filt.drop_duplicates().reset_index(drop=True)
+filt.index=filt.index+1
 #En esta parte arreglamos un pequeño error en los emails que se nos presenta 
 # para evitar errores futuros en el procesamiento de las columnas
 
@@ -48,31 +49,7 @@ def aux_fun_error(email):
 filt["Es_analista"]= filt.apply(lambda x:aux_fun_error(x["Email"]),axis=1)
 
 
-#Vamos a eliminar a continuación con el siguiente algoritmo un error
-# que se presenta cuando en una reunion ingresan varios analistas,
-# y en estos casos se pueden llegar a dañar nuestros resultados,
-# porque si el otro analista que ingresa dura mas en la reunion,
-# en verdad estaríamos considerando un tiempo de conexion mucho menor
-# de lo que en verdad fue
-for i in range(filt.shape[0]):
-    if filt.loc[i+1,"Rol"]=="Organizer":
-        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
-        if numero_asistentes>1:
-            for j in range(1,numero_asistentes):
-              if filt.loc[i+j+1,"Es_analista"]==1:
-                # En el caso de que el segundo analista hubiera estado conectado por mas tiempo los vamos a cambiar
-                if filt.loc[i+1,"tiempo conectado"]<filt.loc[i+j+1,"tiempo conectado"]:
-                    temp_row = filt.iloc[i].copy()
-                    filt.iloc[i] = filt.iloc[i+j]
-                    filt.iloc[i+j] = temp_row
-                    filt["Rol"].iloc[i]="Organizer"
-                    filt["Rol"].iloc[i+j]="Presenter"
-                    break
-                else: 
-                    continue
-
-
-#Vamos a arreglar otro error que nos encontramos 
+#Vamos a arreglar un error que nos encontramos 
 # y es que aveces a los analistas se les asigna un nombre erroneo. 
 # Posiblemente de un asistente a la reunión y por tanto esto nos puede evitar 
 # obtener información correcta de los analistas.
@@ -190,11 +167,9 @@ filt["inicio agendado"]=filt.apply(lambda x: fecha_ing(x["inicio agendado"]),axi
 
 filt["inicio agendado"]=filt.apply(lambda x: pd.to_datetime(x["inicio agendado"]),axis=1)
 filt["duracion planeada"]=filt.apply(lambda x: pd.to_timedelta(x["duracion planeada"]),axis=1)
-filt["tiempo conectado"]=filt.apply(lambda x: pd.to_timedelta(x["tiempo conectado"]),axis=1)
+
 filt["tiempo conectado asistentes"]=filt.apply(lambda x: pd.to_timedelta(x["tiempo conectado asistentes"]),axis=1)
-#hacemos un pequeño arreglo para evitar las molestias operacionales que nos puede presentar el tener System.Object[] en algunas filas, en lugar de tener una fecha
-filt["tiempo de entrada inevitable"]=filt.apply(lambda x: pd.to_datetime(x["tiempo de entrada inevitable"])-timedelta(hours=5) if str(x["tiempo de entrada inevitable"])!="System.Object[]" else dt(1990,1,1) ,axis=1)
-filt["hora de ingreso"]=filt.apply(lambda x: pd.to_datetime(x["hora de ingreso"])-timedelta(hours=5) if str(x["hora de ingreso"])!="System.Object[]" else  dt(1990,1,1),axis=1)
+
 
 #Vamos a revisar que no se introduzcan reuniones que aún no han sucedido
 #  hasta la recoleccion da datos.
@@ -283,7 +258,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
