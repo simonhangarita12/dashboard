@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -70,7 +70,53 @@ for i in range(filt.shape[0]):
                     break
                 else: 
                     continue
-filt=filt.drop(columns=["Es_analista"])
+
+
+#Vamos a arreglar otro error que nos encontramos 
+# y es que aveces a los analistas se les asigna un nombre erroneo. 
+# Posiblemente de un asistente a la reunión y por tanto esto nos puede evitar 
+# obtener información correcta de los analistas.
+
+analistas= filt[filt["Es_analista"]==1]["Email"].unique()
+dict_nombres={analista:[] for analista in analistas}
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"Es_analista"]==1:
+        dict_nombres[filt.loc[i+1,"Email"]].append(filt.loc[i+1,"Nombre"])
+from statistics import mode
+llaves=list(dict_nombres.keys())
+dict_nombres_moda={correo:mode(dict_nombres[correo]) for correo in llaves}
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"Es_analista"]==1:
+        filt["Nombre"].iloc[i]=dict_nombres_moda[filt.loc[i+1,"Email"]]
+
+ #Se arregla el error de que una persona se desconecta y se vuelta a conectar 
+ # varias veces en la reunion. Lo cual dañaba los tiempos para el analisis 
+
+from datetime import timedelta
+from datetime import datetime as dt
+#vamos a usar en cambio de formato inicial en varios columnas,
+#  para tenerlas como fecha y asi poder hacer la manipulacion que queremos 
+# hacer para que se le sumen los tiempos de conexión a la persona que pudo
+#  haberse salido y vuelto a ingresar varias veces a la reunion.
+filt["tiempo conectado"]=filt.apply(lambda x: pd.to_timedelta(x["tiempo conectado"]),axis=1)
+filt["hora de ingreso"]=filt.apply(lambda x: pd.to_datetime(x["hora de ingreso"])-timedelta(hours=5) if str(x["hora de ingreso"])!="System.Object[]" else  dt(1990,1,1),axis=1)
+filt["Nombre"]=filt.apply(lambda x: str(x["Nombre"]).strip(),axis=1)
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"Rol"]=="Organizer":
+        lista_asistentes=[]
+        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
+        for j in range(1,numero_asistentes):
+            if filt.loc[i+j+1,"Nombre"] in lista_asistentes:
+                #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
+                x=j
+                numero_cambio=lista_asistentes.index(filt.loc[i+j+1,"Nombre"])+1
+                filt["tiempo conectado"].iloc[i+numero_cambio]=filt.loc[i+1+numero_cambio,"tiempo conectado"]+filt.loc[i+1+j,"tiempo conectado"]
+                filt["hora de ingreso"].iloc[i+numero_cambio]=min(filt.loc[i+1+numero_cambio,"hora de ingreso"],filt.loc[i+1+j,"hora de ingreso"])
+                lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
+            else:
+                lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
+
+
 
 
 #creamos nuevas columnas para obtener posteriormente los tiempos muertos por reunion
@@ -79,12 +125,20 @@ filt["tiempos inevitables"]=filt.apply(lambda x: [], axis=1)
 
 #en este proceso vamos a almacenar los tiempos que duraron los asistentes
 #  en la reunion junto con su hora de entrada
+filt["tiempos"]=filt.apply(lambda x: [], axis=1)
+filt["tiempos inevitables"]=filt.apply(lambda x: [], axis=1)
+
 for i in range(filt.shape[0]):
     if filt.loc[i+1,"Rol"]=="Organizer":
         numero_asistentes=filt.loc[i+1,"Numero de participantes"]
         if numero_asistentes>1:
-          lista=list(filt["tiempo conectado"][i+1:i+numero_asistentes])
-          inevitables=list(filt["hora de ingreso"][i+1:i+numero_asistentes])
+          lista=[]
+          inevitables=[]
+          for j in range(1,numero_asistentes):
+             if filt.loc[i+j+1,"Es_analista"]==0:
+                lista.append(filt.loc[i+j+1,"tiempo conectado"])
+                inevitables.append(filt.loc[i+j+1,"hora de ingreso"])
+          
           filt.at[i+1,"tiempos"]=lista
           filt.at[i+1,"tiempos inevitables"]=inevitables
 #seleccionamos como un aproximado del tiempo que duraron los asistentes 
@@ -92,6 +146,7 @@ for i in range(filt.shape[0]):
 #  su hora de llegada a la reunion
 filt["tiempo conectado asistentes"]=filt.apply(lambda x: max(x["tiempos"])if len(x["tiempos"])>0 else 0, axis=1)
 filt["tiempo de entrada inevitable"]=filt.apply(lambda x:x["tiempos inevitables"][x["tiempos"].index(max(x["tiempos"]))]if len(x["tiempos"])>0 else x["hora de ingreso"],axis=1)
+filt=filt.drop(columns=["Es_analista"])  
 #seleccionamos unicamente a los organizadores de las reuniones, 
 # ya que dentro de esto se van a encontrar todas las reuniones de los analistas
 filt=filt[filt["Rol"]=="Organizer"]
@@ -228,7 +283,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -460,17 +514,23 @@ def plot_graph(nclick,emp_draw,empleado):
         aux_card=aux_plot[aux_plot["tiempo conectado asistentes"]>timedelta(minutes=10)]
         aux_plot=aux_plot.sort_values("hora de ingreso")
         promedio=aux_card["tiempo conectado"].mean()
-        aux_card["year"] =aux_card["hora de ingreso"].dt.year
-        aux_card["numero semana"]=aux_card.apply(lambda x:(x["hora de ingreso"]).isocalendar().week,axis=1)
-        promedio_sem_ant=aux_card[(aux_card["year"]!=aux_card["year"].iloc[-1])|(aux_card["numero semana"]!=aux_card["numero semana"].iloc[-1])]
-        promedio_ant=promedio_sem_ant["tiempo conectado"].mean()
-        promedio_porc=(promedio.total_seconds()-promedio_ant.total_seconds())/promedio_ant.total_seconds()
-        titulo_card="Promedio de tiempo en conexiones de "+ emp_draw
-        promedio_card= str(round(promedio.total_seconds()/60,3)) +" minutos"
-        if promedio_porc>0:
-            aumento_card,style=f"+{round(promedio_porc,3)}%",{"color":"green"}
+        if aux_card.shape[0]==0:
+            titulo_card="No se encuentran conexiones efectivas de "+ emp_draw
+            promedio_card="0 minutos"
+            aumento_card="0%"
+            style={"color":"black"}
         else:
-            aumento_card,style=f"{round(promedio_porc,3)}%",{"color":"red"}
+            aux_card["year"] =aux_card["hora de ingreso"].dt.year
+            aux_card["numero semana"]=aux_card.apply(lambda x:(x["hora de ingreso"]).isocalendar().week,axis=1)
+            promedio_sem_ant=aux_card[(aux_card["year"]!=aux_card["year"].iloc[-1])|(aux_card["numero semana"]!=aux_card["numero semana"].iloc[-1])]
+            promedio_ant=promedio_sem_ant["tiempo conectado"].mean()
+            promedio_porc=(promedio.total_seconds()-promedio_ant.total_seconds())/promedio_ant.total_seconds()
+            titulo_card="Promedio de tiempo en conexiones de "+ emp_draw
+            promedio_card= str(round(promedio.total_seconds()/60,3)) +" minutos"
+            if promedio_porc>0:
+                aumento_card,style=f"+{round(promedio_porc,3)}%",{"color":"green"}
+            else:
+                aumento_card,style=f"{round(promedio_porc,3)}%",{"color":"red"}
         por_dia=aux_plot[["hora de ingreso","Empresa","tiempo conectado","tiempo conectado asistentes"]][aux_plot["hora de ingreso"]>dt(year=1991,month=1,day=1)]
         perdidas=por_dia[por_dia["tiempo conectado asistentes"]<=timedelta(minutes=10)]
         por_dia=por_dia[por_dia["tiempo conectado"]>timedelta(minutes=10)]
@@ -479,13 +539,19 @@ def plot_graph(nclick,emp_draw,empleado):
         perdidas["year"] = perdidas["hora de ingreso"].dt.year
         perdidas["month"] = perdidas["hora de ingreso"].dt.month
         perdidas["day"] = perdidas["hora de ingreso"].dt.day
-        perdidas["fecha"] = perdidas.apply(lambda x: dt(x["year"], x["month"], x["day"]), axis=1)
+        if perdidas.shape[0]!=0:
+          perdidas["fecha"] = perdidas.apply(lambda x: dt(x["year"], x["month"], x["day"]), axis=1)
+        else:
+            perdidas["fecha"]=dt(1990,1,1)
         perdidas_group=perdidas.groupby("fecha")["numero de reuniones"].sum().reset_index()
         por_dia["numero de reuniones"]=1
         por_dia["year"] = por_dia["hora de ingreso"].dt.year
         por_dia["month"] = por_dia["hora de ingreso"].dt.month
         por_dia["day"] = por_dia["hora de ingreso"].dt.day
-        por_dia["fecha"] = por_dia.apply(lambda x: dt(x["year"], x["month"], x["day"]), axis=1)
+        if por_dia.shape[0]!=0:
+          por_dia["fecha"] = por_dia.apply(lambda x: dt(x["year"], x["month"], x["day"]), axis=1)
+        else:
+            por_dia["fecha"]=dt(1990,1,1)
         por_dia_group=por_dia.groupby(["fecha"])["numero de reuniones"].sum().reset_index()
         por_dia_group["reunion efectiva"]="Reunión realizada"
         perdidas_group["reunion efectiva"]="No se unieron a la reunión"
@@ -547,7 +613,7 @@ def plot_graph(nclick,emp_draw,empleado):
         fig_scatter= px.scatter(aux_plot, x="minutos perdidos", 
                                 y="minutos perdidos por causa externa",
                                 title="Disperción de los tiempos perdidos por reunion",
-                                hover_data=["Empresa","inicio agendado"] ,
+                                hover_data=["Empresa","hora de ingreso"] ,
                                 labels={"minutos perdidos": "Minutos perdidos", "minutos perdidos por causa externa": "Minutos perdidos por impuntualidad de los asistentes"},
                                 render_mode='webgl')
         fig_scatter.update_traces(
@@ -585,17 +651,23 @@ def plot_graph(nclick,emp_draw,empleado):
         aux_card=aux_plot[aux_plot["tiempo conectado asistentes"]>timedelta(minutes=10)]
         aux_plot=aux_plot.sort_values("hora de ingreso")
         promedio=aux_card["tiempo conectado"].mean()
-        aux_card["year"] =aux_card["hora de ingreso"].dt.year
-        aux_card["numero semana"]=aux_card.apply(lambda x:(x["hora de ingreso"]).isocalendar().week,axis=1)
-        promedio_sem_ant=aux_card[(aux_card["year"]!=aux_card["year"].iloc[-1])|(aux_card["numero semana"]!=aux_card["numero semana"].iloc[-1])]
-        promedio_ant=promedio_sem_ant["tiempo conectado"].mean()
-        promedio_porc=(promedio.total_seconds()-promedio_ant.total_seconds())/promedio_ant.total_seconds()
-        titulo_card="Promedio de tiempo en conexiones de "+ empleado_cap
-        promedio_card= str(round(promedio.total_seconds()/60,3)) +" minutos"
-        if promedio_porc>0:
-            aumento_card,style=f"+{round(promedio_porc,3)}%",{"color":"green"}
+        if aux_card.shape[0]==0:
+            titulo_card="No se encuentran conexiones efectivas de "+ emp_draw
+            promedio_card="0 minutos"
+            aumento_card="0%"
+            style={"color":"black"}
         else:
-            aumento_card,style=f"{round(promedio_porc,3)}%",{"color":"red"}
+            aux_card["year"] =aux_card["hora de ingreso"].dt.year
+            aux_card["numero semana"]=aux_card.apply(lambda x:(x["hora de ingreso"]).isocalendar().week,axis=1)
+            promedio_sem_ant=aux_card[(aux_card["year"]!=aux_card["year"].iloc[-1])|(aux_card["numero semana"]!=aux_card["numero semana"].iloc[-1])]
+            promedio_ant=promedio_sem_ant["tiempo conectado"].mean()
+            promedio_porc=(promedio.total_seconds()-promedio_ant.total_seconds())/promedio_ant.total_seconds()
+            titulo_card="Promedio de tiempo en conexiones de "+ emp_draw
+            promedio_card= str(round(promedio.total_seconds()/60,3)) +" minutos"
+            if promedio_porc>0:
+                aumento_card,style=f"+{round(promedio_porc,3)}%",{"color":"green"}
+            else:
+                aumento_card,style=f"{round(promedio_porc,3)}%",{"color":"red"}
         por_dia=aux_plot[["hora de ingreso","Empresa","tiempo conectado","tiempo conectado asistentes"]][aux_plot["hora de ingreso"]>dt(year=1991,month=1,day=1)]
         perdidas=por_dia[por_dia["tiempo conectado asistentes"]<=timedelta(minutes=10)]
         por_dia=por_dia[por_dia["tiempo conectado"]>timedelta(minutes=10)]
@@ -672,7 +744,7 @@ def plot_graph(nclick,emp_draw,empleado):
         fig_scatter= px.scatter(aux_plot, x="minutos perdidos", 
                                 y="minutos perdidos por causa externa",
                                 title="Disperción de los tiempos perdidos por reunion",
-                                hover_data=["Empresa","inicio agendado"] ,
+                                hover_data=["Empresa","hora de ingreso"] ,
                                 labels={"minutos perdidos": "Minutos perdidos", "minutos perdidos por causa externa": "Minutos perdidos por impuntualidad de los asistentes"},
                                 render_mode='webgl')
         fig_scatter.update_traces(
