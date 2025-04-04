@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -214,13 +214,15 @@ def eliminar_palabras(nombre_empresa):
     nombre_empresa=nombre_empresa.replace("PESV","")
     nombre_empresa=nombre_empresa.replace("SST","")
     nombre_empresa=nombre_empresa.replace(".","")
+    nombre_empresa=nombre_empresa.replace(",","")
     nombre_empresa = " ".join(nombre_empresa.split())
     return nombre_empresa
 filt["Empresa"]=filt.apply(lambda x:eliminar_palabras(x["Empresa"]),axis=1)
 #Colocamos sin especificar para el nombre de las empresas 
 # que no tenian un nombre significativo
 filt["Empresa"]=filt.apply(lambda x:"Sin especificar" if x["Empresa"]=="" else x["Empresa"],axis=1)
-
+#vamos a hacer un pequeño cambio para evitar molestias en la visualizacion
+filt["Empresa"]=filt.apply(lambda x:"CASTROTCHERASSI" if x["Empresa"]=="1CASTROTCHERASSI" else x["Empresa"],axis=1)
 
 #hacemos un poquito de limpieza en los nombres de las empresas 
 # para que sean mas claros y ademas eliminemos facilmente empresas 
@@ -248,7 +250,7 @@ dic_semana={"Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miercoles",
             "Thursday":"Jueves","Friday":"Viernes","Saturday":"Sabado"
             }
 heat_map_group["dia de la semana"]=heat_map_group.apply(lambda x:dic_semana[x["dia de la semana"]],axis=1)
-empresas=filt["Empresa"].unique()
+empresas=filt["Empresa"].sort_values(ascending=True).unique()
 analistas=filt["Nombre"].unique()
 from dash import html, dcc, State,Input, Output,callback, Dash
 import plotly.express as px
@@ -258,7 +260,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -304,6 +305,14 @@ layout_heat_map=dbc.Container([
         dbc.Col([
             dcc.Graph(figure={}, id="heat_map")
         ],width=20,md=10)
+    ]),
+    dbc.Row([
+        dbc.Col([
+            dcc.Graph(figure={},id="pie_dias")
+        ]),
+        dbc.Col([
+            dcc.Graph(figure={},id="pie_horas")
+        ])
     ])
 ])
 layout_analistas=dbc.Container([
@@ -353,9 +362,20 @@ layout_analistas=dbc.Container([
                 dbc.CardBody([
                     html.P("Promedio de tiempo en conexiones", className="card-title",id="titulo_carta"),
                     html.H4("45 minutos",className="card_text",id="promedio_carta"),
-                    html.P("+0%",className="card-text text-decoration-underline",id="aumento")
+                    html.P("+0%",className="card-text text-decoration-underline",id="aumento"),
+                    
                 ])
-            ],style={"width": "200px", "height": "270px","margin-top": "150px"})
+            ],style={"width": "200px", "height": "225px","margin-top":"150px"})
+        ]),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.P("Promedio de tiempo de conexiones sin contar retrasos",className="card-title", id="titulo_sin_ret"),
+                    html.H4("45 minutos",className="card-text",id="promedio_sin_ret"),
+                    html.P("0%",className="card-text text-decoration-underline",id="aumento_sin_ret")
+                    
+                ])
+            ],style={"width":"200px","height":"225px"})
         ])
     ])
 ])
@@ -429,6 +449,8 @@ def actualizar_layout(layout_selected):
         return layout_empresa
 @callback(
     Output("heat_map","figure"),
+    Output("pie_dias","figure"),
+    Output("pie_horas","figure"),
     Input('button_heat', 'n_clicks'),
     [State('year_bar', 'value'),
      State('month_bar', 'value'),
@@ -437,21 +459,27 @@ def actualizar_layout(layout_selected):
 def plot_map(n_click,year,month,day):
     if n_click is None:
         empty_heatmap = np.zeros((10, 10))
-        return px.imshow(empty_heatmap, color_continuous_scale='viridis')
+        return px.imshow(empty_heatmap, color_continuous_scale='viridis'), px.line(),px.line()
     else:
         
             year=int(year)
             month=int(month)
             day=int(day)
+            dic_horas={7:"7 am",8:"8 am",9:"9 am",10:"10 am",11:"11 am",12:"12 pm",
+                       13:"1 pm",14:"2 pm",15:"3 pm",16:"4 pm",17:"5 pm"}
             orden_sem=["Lunes","Martes","Miercoles","Jueves","Viernes","Sabado"]
-            orden_hora=[i for i in range(7,12)]+[i for i in range(13,18)]
+            orden_hora=["7 am","8 am","9 am","10 am","11 am",
+                       "1 pm","2 pm","3 pm","4 pm","5 pm"]
             numero_semana=dt(year,month,day).isocalendar().week
             anio=dt(year,month,day).year
             filt_heat=heat_map_group[heat_map_group["numero semana"]==numero_semana]
             filt_heat=filt_heat[filt_heat["year"]==anio]
-            pivot=filt_heat.pivot_table(index="dia de la semana",columns="hora",values='numero reuniones', aggfunc='sum')
+            filt_heat["hora formato"]=filt_heat.apply(lambda x:dic_horas[x["hora"]],axis=1)
+            pivot=filt_heat.pivot_table(index="dia de la semana",columns="hora formato",values='numero reuniones', aggfunc='sum')
             pivot = pivot.reindex(index=orden_sem, columns=orden_hora, fill_value=0)
             pivot = pivot.fillna(0)
+            aux_horas = filt_heat.groupby(["hora formato"])["numero reuniones"].sum().reset_index()
+            aux_dias=filt_heat.groupby(["dia de la semana"])["numero reuniones"].sum().reset_index()
             fig= px.imshow(pivot,
                            labels=dict(x="hora", y="dia de la semana", color="numero reuniones"),
                            x=pivot.columns,
@@ -463,7 +491,17 @@ def plot_map(n_click,year,month,day):
             fig.update_layout(title="Mapa de calor Numero de reuniones por dia y hora",
                               xaxis_title="Hora",
                               yaxis_title="Día")
-            return fig
+            fig_hora=px.pie(aux_horas,values="numero reuniones",
+                            names="hora formato",
+                            labels={"numero reuniones":"Número de reuniones",
+                                    "hora formato":"Hora"},
+                            title="Reuniones por hora")
+            fig_dia=px.pie(aux_dias,values="numero reuniones",
+                           names="dia de la semana",
+                           labels={"numero reuniones":"Número de reuniones",
+                                   "dia de la semana":"Día"},
+                           title="Reuniones por día")
+            return fig,fig_dia,fig_hora
 
          
         
@@ -475,6 +513,10 @@ def plot_map(n_click,year,month,day):
     Output("promedio_carta","children"),
     Output("aumento","children"),
     Output("aumento", "style"),
+    Output("titulo_sin_ret","children"),
+    Output("promedio_sin_ret","children"),
+    Output("aumento_sin_ret","children"),
+    Output("aumento_sin_ret","style"),
     Input("boton_analistas", 'n_clicks'),
     Input("drawdown_analistas","value"),
     [State('empleado_busqueda', 'value'),
@@ -484,12 +526,20 @@ def plot_graph(nclick,emp_draw,empleado):
     if nclick is None:
         aux_plot=filt[filt["Nombre"]==emp_draw]
         aux_plot=aux_plot[aux_plot["hora de ingreso"]>dt(1991,1,1)]
+        
         aux_plot["minutos de conexion"]=aux_plot['tiempo conectado'].dt.total_seconds() // 60 + (aux_plot['tiempo conectado'].dt.total_seconds() % 60)/100
         aux_plot["minutos perdidos"]=aux_plot['tiempo muerto'].dt.total_seconds() // 60+ (aux_plot['tiempo muerto'].dt.total_seconds() % 60)/100
         aux_plot["minutos perdidos por causa externa"]=aux_plot['tiempo muerto inevitable'].dt.total_seconds() // 60+ (aux_plot['tiempo muerto inevitable'].dt.total_seconds() % 60)/100
         aux_card=aux_plot[aux_plot["tiempo conectado asistentes"]>timedelta(minutes=10)]
+        minutos_sin_retraso=aux_plot.copy()
+        minutos_sin_retraso["minutos de conexion"]=minutos_sin_retraso.apply(lambda x:(x["tiempo conectado"]-x["tiempo muerto inevitable"])if (x["tiempo conectado"]>x["tiempo muerto inevitable"])else x["tiempo conectado"],axis=1)
+        minutos_sin_retraso["minutos de conexion"]=minutos_sin_retraso['minutos de conexion'].dt.total_seconds() // 60 + (minutos_sin_retraso['minutos de conexion'].dt.total_seconds() % 60)/100
+        minutos_sin_retraso["tiempo conectado"]=minutos_sin_retraso.apply(lambda x:(x["tiempo conectado"]-x["tiempo muerto inevitable"])if (x["tiempo conectado"]>x["tiempo muerto inevitable"])else x["tiempo conectado"],axis=1)
+        aux_card_ret=minutos_sin_retraso[minutos_sin_retraso["tiempo conectado asistentes"]>timedelta(minutes=10)]
+        
         aux_plot=aux_plot.sort_values("hora de ingreso")
         promedio=aux_card["tiempo conectado"].mean()
+        promedio_ret=aux_card_ret["tiempo conectado"].mean()
         if aux_card.shape[0]==0:
             titulo_card="No se encuentran conexiones efectivas de "+ emp_draw
             promedio_card="0 minutos"
@@ -507,6 +557,23 @@ def plot_graph(nclick,emp_draw,empleado):
                 aumento_card,style=f"+{round(promedio_porc,3)}%",{"color":"green"}
             else:
                 aumento_card,style=f"{round(promedio_porc,3)}%",{"color":"red"}
+        if aux_card_ret.shape[0]==0:
+            titulo_card_ret="No se encuentran conexiones efectivas de "+ emp_draw
+            promedio_ret="0 minutos"
+            aumento_card_ret="0%"
+            style_ret={"color":"black"}
+        else:
+            aux_card_ret["year"] =aux_card_ret["hora de ingreso"].dt.year
+            aux_card_ret["numero semana"]=aux_card_ret.apply(lambda x:(x["hora de ingreso"]).isocalendar().week,axis=1)
+            promedio_sem_ant_ret=aux_card_ret[(aux_card_ret["year"]!=aux_card_ret["year"].iloc[-1])|(aux_card_ret["numero semana"]!=aux_card_ret["numero semana"].iloc[-1])]
+            promedio_ant_ret=promedio_sem_ant_ret["tiempo conectado"].mean()
+            promedio_porc_ret=(promedio_ret.total_seconds()-promedio_ant_ret.total_seconds())/promedio_ant_ret.total_seconds()
+            titulo_card_ret="Promedio de tiempo en conexiones sin contar los retrasos para "+ emp_draw
+            promedio_card_ret= str(round(promedio_ret.total_seconds()/60,3)) +" minutos"
+            if promedio_porc_ret>0:
+                aumento_card_ret,style_ret=f"+{round(promedio_porc_ret,3)}%",{"color":"green"}
+            else:
+                aumento_card_ret,style_ret=f"{round(promedio_porc_ret,3)}%",{"color":"red"}
         por_dia=aux_plot[["hora de ingreso","Empresa","tiempo conectado","tiempo conectado asistentes"]][aux_plot["hora de ingreso"]>dt(year=1991,month=1,day=1)]
         perdidas=por_dia[por_dia["tiempo conectado asistentes"]<=timedelta(minutes=10)]
         por_dia=por_dia[por_dia["tiempo conectado"]>timedelta(minutes=10)]
@@ -533,20 +600,21 @@ def plot_graph(nclick,emp_draw,empleado):
         perdidas_group["reunion efectiva"]="No se unieron a la reunión"
         por_dia_group=pd.concat([por_dia_group,perdidas_group])
         por_dia_group=por_dia_group.sort_values("fecha")
+        
         fig_line=px.line(aux_plot,x="hora de ingreso",
                          y="minutos de conexion",
                          hover_data=["Empresa"] ,
                          labels={"hora de ingreso": "Fecha de conexión", "minutos de conexion": "Minutos conectado"},
                          title="Tiempo de conexión por reunion de "+str(emp_draw))
+        fig_line.update_layout(showlegend=False)
+        fig_line.update_layout(width=650, height=500)
         fig_line.update_traces(
             hoverlabel=dict(
             bgcolor="lavender",      
             font=dict(color="black", size=12)  
             )
         )
-        fig_line.update_traces(
-           marker_color="purple" 
-        )
+        
         x_inf=min(aux_plot["hora de ingreso"])
         x_sup=max(aux_plot["hora de ingreso"])
         fig_line.add_shape(
@@ -609,10 +677,10 @@ def plot_graph(nclick,emp_draw,empleado):
           line=dict(color="red", width=2, dash="solid")
         )
         fig_scatter.update_layout(width=825, height=600)
-        return fig_line, fig_bar, fig_scatter, titulo_card, promedio_card,aumento_card,style
-        #return px.line(),px.bar(),px.scatter(),"Promedio de tiempo en conexiones","45 minutos","+0%",{"color":"black"}
+        return fig_line, fig_bar, fig_scatter,titulo_card, promedio_card,aumento_card,style,titulo_card_ret, promedio_card_ret,aumento_card_ret,style_ret
+        
     elif empleado.lower() not in filt["Nombre"].str.lower().unique():
-            return px.line(),px.bar(),px.scatter(),"Promedio de tiempo en conexiones","45 minutos","+0%",{"color":"black"}
+            return px.line(),px.bar(),px.scatter(),"Promedio de tiempo en conexiones","45 minutos","+0%",{"color":"black"},"Promedio de tiempo en conexiones sin retrasos","45 minutos","+0%",{"color":"black"}
     else:
         def capitalize_all(palabra):
           l=palabra.split()
@@ -625,8 +693,14 @@ def plot_graph(nclick,emp_draw,empleado):
         aux_plot["minutos perdidos"]=aux_plot['tiempo muerto'].dt.total_seconds() // 60+ (aux_plot['tiempo muerto'].dt.total_seconds() % 60)/100
         aux_plot["minutos perdidos por causa externa"]=aux_plot['tiempo muerto inevitable'].dt.total_seconds() // 60+ (aux_plot['tiempo muerto inevitable'].dt.total_seconds() % 60)/100
         aux_card=aux_plot[aux_plot["tiempo conectado asistentes"]>timedelta(minutes=10)]
+        minutos_sin_retraso=aux_plot.copy()
+        minutos_sin_retraso["minutos de conexion"]=minutos_sin_retraso.apply(lambda x:(x["tiempo conectado"]-x["tiempo muerto inevitable"])if (x["tiempo conectado"]>x["tiempo muerto inevitable"])else x["tiempo conectado"],axis=1)
+        minutos_sin_retraso["minutos de conexion"]=minutos_sin_retraso['minutos de conexion'].dt.total_seconds() // 60 + (minutos_sin_retraso['minutos de conexion'].dt.total_seconds() % 60)/100
+        minutos_sin_retraso["tiempo conectado"]=minutos_sin_retraso.apply(lambda x:(x["tiempo conectado"]-x["tiempo muerto inevitable"])if (x["tiempo conectado"]>x["tiempo muerto inevitable"])else x["tiempo conectado"],axis=1)
+        aux_card_ret=minutos_sin_retraso[minutos_sin_retraso["tiempo conectado asistentes"]>timedelta(minutes=10)]
         aux_plot=aux_plot.sort_values("hora de ingreso")
         promedio=aux_card["tiempo conectado"].mean()
+        promedio_ret=aux_card_ret["tiempo conectado"].mean()
         if aux_card.shape[0]==0:
             titulo_card="No se encuentran conexiones efectivas de "+ emp_draw
             promedio_card="0 minutos"
@@ -644,6 +718,23 @@ def plot_graph(nclick,emp_draw,empleado):
                 aumento_card,style=f"+{round(promedio_porc,3)}%",{"color":"green"}
             else:
                 aumento_card,style=f"{round(promedio_porc,3)}%",{"color":"red"}
+        if aux_card_ret.shape[0]==0:
+            titulo_card_ret="No se encuentran conexiones efectivas de "+ emp_draw
+            promedio_ret="0 minutos"
+            aumento_card_ret="0%"
+            style_ret={"color":"black"}
+        else:
+            aux_card_ret["year"] =aux_card_ret["hora de ingreso"].dt.year
+            aux_card_ret["numero semana"]=aux_card_ret.apply(lambda x:(x["hora de ingreso"]).isocalendar().week,axis=1)
+            promedio_sem_ant_ret=aux_card_ret[(aux_card_ret["year"]!=aux_card_ret["year"].iloc[-1])|(aux_card_ret["numero semana"]!=aux_card_ret["numero semana"].iloc[-1])]
+            promedio_ant_ret=promedio_sem_ant_ret["tiempo conectado"].mean()
+            promedio_porc_ret=(promedio_ret.total_seconds()-promedio_ant_ret.total_seconds())/promedio_ant_ret.total_seconds()
+            titulo_card_ret="Promedio de tiempo en conexiones sin contar los retrasos para "+ emp_draw
+            promedio_card_ret= str(round(promedio_ret.total_seconds()/60,3)) +" minutos"
+            if promedio_porc_ret>0:
+                aumento_card_ret,style_ret=f"+{round(promedio_porc_ret,3)}%",{"color":"green"}
+            else:
+                aumento_card_ret,style_ret=f"{round(promedio_porc_ret,3)}%",{"color":"red"}
         por_dia=aux_plot[["hora de ingreso","Empresa","tiempo conectado","tiempo conectado asistentes"]][aux_plot["hora de ingreso"]>dt(year=1991,month=1,day=1)]
         perdidas=por_dia[por_dia["tiempo conectado asistentes"]<=timedelta(minutes=10)]
         por_dia=por_dia[por_dia["tiempo conectado"]>timedelta(minutes=10)]
@@ -740,7 +831,7 @@ def plot_graph(nclick,emp_draw,empleado):
           line=dict(color="red", width=2, dash="solid")
         )
         fig_scatter.update_layout(width=825, height=600)
-        return fig_line, fig_bar, fig_scatter, titulo_card, promedio_card,aumento_card,style
+        return fig_line, fig_bar, fig_scatter, titulo_card, promedio_card,aumento_card,style, titulo_card_ret, promedio_card_ret,aumento_card_ret,style_ret
 @callback(
     Output("bubble_empresas","figure"),
     Output("tacometro_minutos_retraso","figure"),
@@ -757,8 +848,9 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
         empresas_sum["Porcentaje tiempo efectivo"]=empresas_sum.apply(lambda x:round((x["tiempo conectado asistentes"]/x["tiempo conectado"])*100,3) if (x["tiempo conectado"]>x["tiempo conectado asistentes"])else 100, axis=1)
         recuento_empresas=pd.merge(empresas_prom,empresas_sum,on="Empresa",how="inner")
         recuento_empresas["inverso tiempo efectivo"]=101-recuento_empresas["Porcentaje tiempo efectivo"]
-        recuento_empresas["tiempo muerto minutos"]=recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() // 60+ (recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() % 60)/100
+        recuento_empresas["tiempo muerto minutos"]=recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() // 60+ (recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() % 60)/100 
         recuento_empresas["color"]=np.where(recuento_empresas["Empresa"]==empresa_draw, "red","blue")
+        
         fig_scatter_emp=px.scatter(recuento_empresas,
             x="tiempo muerto minutos",
             y="reuniones",
