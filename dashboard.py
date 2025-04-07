@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -215,14 +215,16 @@ def eliminar_palabras(nombre_empresa):
     nombre_empresa=nombre_empresa.replace("SST","")
     nombre_empresa=nombre_empresa.replace(".","")
     nombre_empresa=nombre_empresa.replace(",","")
+    nombre_empresa=nombre_empresa.replace("1CASTROTCHERASSI","CASTROTCHERASSI")
+    nombre_empresa=nombre_empresa.replace("2025","")
+    nombre_empresa=nombre_empresa.replace("360","TRES SESENTA")
+    nombre_empresa=nombre_empresa.replace("28","")
     nombre_empresa = " ".join(nombre_empresa.split())
     return nombre_empresa
 filt["Empresa"]=filt.apply(lambda x:eliminar_palabras(x["Empresa"]),axis=1)
 #Colocamos sin especificar para el nombre de las empresas 
 # que no tenian un nombre significativo
 filt["Empresa"]=filt.apply(lambda x:"Sin especificar" if x["Empresa"]=="" else x["Empresa"],axis=1)
-#vamos a hacer un pequeño cambio para evitar molestias en la visualizacion
-filt["Empresa"]=filt.apply(lambda x:"CASTROTCHERASSI" if x["Empresa"]=="1CASTROTCHERASSI" else x["Empresa"],axis=1)
 
 #hacemos un poquito de limpieza en los nombres de las empresas 
 # para que sean mas claros y ademas eliminemos facilmente empresas 
@@ -260,7 +262,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -416,6 +417,11 @@ layout_empresa=dbc.Container([
         ]),
         dbc.Col([
             dcc.Graph(id="tacometro_tiempo_reuniones")
+        ])
+    ]), 
+    dbc.Row([
+        dbc.Col([
+            dcc.Graph(id="cluster_empresas")
         ])
     ])
 ])
@@ -837,6 +843,7 @@ def plot_graph(nclick,emp_draw,empleado):
     Output("bubble_empresas","figure"),
     Output("tacometro_minutos_retraso","figure"),
     Output("tacometro_tiempo_reuniones","figure"),
+    Output("cluster_empresas","figure"),
     Input("boton_empresas","n_clicks"),
     Input("drawdown_emp","value"),
     [State("empresa_busqueda","value")]
@@ -845,13 +852,31 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
     if n_click is None:
         empresas_prom=filt.groupby(["Empresa"])[["tiempo muerto inevitable","tiempo conectado asistentes"]].mean().reset_index()
         empresas_prom["tiempo conectado minutos"]=empresas_prom['tiempo conectado asistentes'].dt.total_seconds() // 60+ (empresas_prom['tiempo conectado asistentes'].dt.total_seconds() % 60)/100
+        faltas=filt[filt["tiempo conectado asistentes"]<timedelta(minutes=5)]
+        empresas_faltas_sum=faltas.groupby(["Empresa"])[["reuniones"]].sum().reset_index()
         empresas_sum=filt.groupby(["Empresa"])[["reuniones","tiempo conectado","tiempo conectado asistentes"]].sum().reset_index()
         empresas_sum["Porcentaje tiempo efectivo"]=empresas_sum.apply(lambda x:round((x["tiempo conectado asistentes"]/x["tiempo conectado"])*100,3) if (x["tiempo conectado"]>x["tiempo conectado asistentes"])else 100, axis=1)
+        empresas_faltas_sum["numero de faltas"]=empresas_faltas_sum["reuniones"]
+        empresas_faltas_sum=empresas_faltas_sum.drop(columns=["reuniones"])
+        empresas_sum=pd.merge(empresas_sum,empresas_faltas_sum,on="Empresa",how="outer")
+        empresas_sum = empresas_sum.fillna(0)
+        empresas_sum["Porcentaje de faltas"]=empresas_sum.apply(lambda x:round((x["numero de faltas"]/x["reuniones"])*100,3) if (x["reuniones"]>0)else 0, axis=1)
+        empresas_sum=empresas_sum.drop(columns=["tiempo conectado asistentes","tiempo conectado"])
         recuento_empresas=pd.merge(empresas_prom,empresas_sum,on="Empresa",how="inner")
         recuento_empresas["inverso tiempo efectivo"]=101-recuento_empresas["Porcentaje tiempo efectivo"]
         recuento_empresas["tiempo muerto minutos"]=recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() // 60+ (recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() % 60)/100 
         recuento_empresas["color"]=np.where(recuento_empresas["Empresa"]==empresa_draw, "red","blue")
-        
+        #Vamos a entrenar un modelo de Kmeans para determinar la mejor forma de separar las empresas agrupandolas segun su comportamiento.
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.cluster import KMeans
+        data_with_names=recuento_empresas[["Empresa","tiempo conectado minutos","tiempo muerto minutos","Porcentaje de faltas"]]
+        data=recuento_empresas[["tiempo conectado minutos","tiempo muerto minutos","Porcentaje de faltas"]]
+        scaler=StandardScaler()
+        data_scaled=scaler.fit_transform(data)
+        k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=0)
+        data['cluster'] = k_means.fit_predict(data_scaled) 
+        data["Empresa"]=data_with_names["Empresa"] 
+        data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Llega con retraso, pero no suele faltar" if x["cluster"]==1 else ("Asiste frecuentemente pero sus reuniones tardan mucho tiempo" if x["cluster"]==2 else "Falta con mucha frecuencia")), axis=1)
         fig_scatter_emp=px.scatter(recuento_empresas,
             x="tiempo muerto minutos",
             y="reuniones",
@@ -865,7 +890,7 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
             size_max=40,
             color="color"
             )
-    
+        fig_scatter_emp.update_layout(width=1200, height=650)
         fig_tac_pro=go.Figure(
                 go.Indicator(
                 mode="gauge+number",
@@ -899,9 +924,27 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
             }
         )
         )
-        fig_scatter_emp.update_layout(width=1200, height=650)
+        
+        fig = go.Figure(data=[go.Scatter3d(
+            x=data["tiempo conectado minutos"],
+            y=data["tiempo muerto minutos"],
+            z=data["Porcentaje de faltas"],
+            marker=dict(color=data["cluster"]),
+            mode='markers',
+            opacity=0.2,
+            hovertext=data.apply(
+                lambda row: f"<b>Empresa:</b> {row['Empresa']}<br>"  
+                        f"<b>Clasificación:</b> {row['grupo']}<br>"
+                        f"<b>Tiempo de conexión promedio:</b> {row['tiempo conectado minutos']:.1f} minutos<br>"
+                        f"<b>Tiempo de retraso promedio:</b> {row['tiempo muerto minutos']:.1f} minutos<br>"
+                        f"<b>Ausencias:</b> {row['Porcentaje de faltas']:.1f}%",
+                axis=1
+            ),
+            hovertemplate="%{hovertext}<extra></extra>"
+        )])
+        fig.update_layout(width=1200, height=700)
 
-        return fig_scatter_emp,fig_tac_pro,fig_tac_min
+        return fig_scatter_emp,fig_tac_pro,fig_tac_min,fig
 
          
     def clean(text):
@@ -920,12 +963,32 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
     
     empresas_prom=filt.groupby(["Empresa"])[["tiempo muerto inevitable","tiempo conectado asistentes"]].mean().reset_index()
     empresas_prom["tiempo conectado minutos"]=empresas_prom['tiempo conectado asistentes'].dt.total_seconds() // 60+ (empresas_prom['tiempo conectado asistentes'].dt.total_seconds() % 60)/100
+    faltas=filt[filt["tiempo conectado asistentes"]<timedelta(minutes=5)]
+    empresas_faltas_sum=faltas.groupby(["Empresa"])[["reuniones"]].sum().reset_index()
     empresas_sum=filt.groupby(["Empresa"])[["reuniones","tiempo conectado","tiempo conectado asistentes"]].sum().reset_index()
     empresas_sum["Porcentaje tiempo efectivo"]=empresas_sum.apply(lambda x:round((x["tiempo conectado asistentes"]/x["tiempo conectado"])*100,3) if (x["tiempo conectado"]>x["tiempo conectado asistentes"])else 100, axis=1)
+    empresas_faltas_sum["numero de faltas"]=empresas_faltas_sum["reuniones"]
+    empresas_faltas_sum=empresas_faltas_sum.drop(columns=["reuniones"])
+    empresas_sum=pd.merge(empresas_sum,empresas_faltas_sum,on="Empresa",how="outer")
+    empresas_sum = empresas_sum.fillna(0)
+    empresas_sum["Porcentaje de faltas"]=empresas_sum.apply(lambda x:round((x["numero de faltas"]/x["reuniones"])*100,3) if (x["reuniones"]>0)else 0, axis=1)
+    empresas_sum=empresas_sum.drop(columns=["tiempo conectado asistentes","tiempo conectado"])
     recuento_empresas=pd.merge(empresas_prom,empresas_sum,on="Empresa",how="inner")
     recuento_empresas["inverso tiempo efectivo"]=101-recuento_empresas["Porcentaje tiempo efectivo"]
-    recuento_empresas["tiempo muerto minutos"]=recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() // 60+ (recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() % 60)/100
+    recuento_empresas["tiempo muerto minutos"]=recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() // 60+ (recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() % 60)/100 
     recuento_empresas["color"]=np.where(recuento_empresas["Empresa"]==empresas_dict[empresa], "red","blue")
+    
+    #Vamos a entrenar un modelo de Kmeans para determinar la mejor forma de separar las empresas agrupandolas segun su comportamiento.
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans
+    data_with_names=recuento_empresas[["Empresa","tiempo conectado minutos","tiempo muerto minutos","Porcentaje de faltas"]]
+    data=recuento_empresas[["tiempo conectado minutos","tiempo muerto minutos","Porcentaje de faltas"]]
+    scaler=StandardScaler()
+    data_scaled=scaler.fit_transform(data)
+    k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=0)
+    data['cluster'] = k_means.fit_predict(data_scaled) 
+    data["Empresa"]=data_with_names["Empresa"] 
+    data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Llega con retraso, pero no suele faltar" if x["cluster"]==1 else ("Asiste frecuentemente pero sus reuniones tardan mucho tiempo" if x["cluster"]==2 else "Falta con mucha frecuencia")), axis=1)
     fig_scatter_emp=px.scatter(recuento_empresas,
                 x="tiempo muerto minutos",
                 y="reuniones",
@@ -939,7 +1002,7 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
                 size_max=40,
                 color="color"
             )
-    print(float(recuento_empresas["tiempo muerto minutos"][recuento_empresas["Empresa"]==empresas_dict[empresa]]))
+    fig_scatter_emp.update_layout(width=1200, height=650)
     fig_tac_pro=go.Figure(
         go.Indicator(
             mode="gauge+number",
@@ -973,9 +1036,27 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
             }
         )
     )
-    fig_scatter_emp.update_layout(width=1200, height=650)
+    
+    fig = go.Figure(data=[go.Scatter3d(
+            x=data["tiempo conectado minutos"],
+            y=data["tiempo muerto minutos"],
+            z=data["Porcentaje de faltas"],
+            marker=dict(color=data["cluster"]),
+            mode='markers',
+            opacity=0.2,
+            hovertext=data.apply(
+                lambda row: f"<b>Empresa:</b> {row['Empresa']}<br>"  
+                        f"<b>Clasificación:</b> {row['grupo']}<br>"
+                        f"<b>Tiempo de conexión promedio:</b> {row['tiempo conectado minutos']:.1f} minutos<br>"
+                        f"<b>Tiempo de retraso promedio:</b> {row['tiempo muerto minutos']:.1f} minutos<br>"
+                        f"<b>Ausencias:</b> {row['Porcentaje de faltas']:.1f}%",
+                axis=1
+            ),
+            hovertemplate="%{hovertext}<extra></extra>"
+    )])
+    fig.update_layout(width=1200, height=700)
 
-    return fig_scatter_emp,fig_tac_pro,fig_tac_min
+    return fig_scatter_emp,fig_tac_pro,fig_tac_min,fig
 
 if __name__ == '__main__':
     app.run(debug=True)
