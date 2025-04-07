@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -26,7 +26,7 @@ data_horas = data_horas.rename(columns={
 #eliminamos la primera fila, ya que contiene informacion del excel original, que aqui no es relevante
 data_horas=data_horas.drop([0],axis=0)
 #seleccionamos las columnas mas relevantes para el analisis
-filt=data_horas[["Nombre","Numero de participantes","Email","Rol","Empresa","hora de ingreso","duracion planeada","inicio agendado","tiempo conectado"]]
+filt=data_horas[["Nombre","Numero de participantes","Email","Rol","Empresa","hora de ingreso","hora de salida","duracion planeada","inicio agendado","tiempo conectado"]]
 filt=filt.drop_duplicates().reset_index(drop=True)
 filt.index=filt.index+1
 #En esta parte arreglamos un pequeño error en los emails que se nos presenta 
@@ -63,8 +63,12 @@ from statistics import mode
 llaves=list(dict_nombres.keys())
 dict_nombres_moda={correo:mode(dict_nombres[correo]) for correo in llaves}
 for i in range(filt.shape[0]):
-    if filt.loc[i+1,"Es_analista"]==1:
-        filt["Nombre"].iloc[i]=dict_nombres_moda[filt.loc[i+1,"Email"]]
+    if filt.loc[i+1,"Rol"]=="Organizer":
+        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
+        for j in range(1,numero_asistentes+1):
+            if filt.loc[i+j,"Es_analista"]==1:
+                if dict_nombres_moda[filt.loc[i+j,"Email"]] != filt.loc[i+j,"Nombre"]:
+                    filt.loc[i+j,"Es_analista"]=0
 
  #Se arregla el error de que una persona se desconecta y se vuelta a conectar 
  # varias veces en la reunion. Lo cual dañaba los tiempos para el analisis 
@@ -77,22 +81,68 @@ from datetime import datetime as dt
 #  haberse salido y vuelto a ingresar varias veces a la reunion.
 filt["tiempo conectado"]=filt.apply(lambda x: pd.to_timedelta(x["tiempo conectado"]),axis=1)
 filt["hora de ingreso"]=filt.apply(lambda x: pd.to_datetime(x["hora de ingreso"])-timedelta(hours=5) if str(x["hora de ingreso"])!="System.Object[]" else  dt(1990,1,1),axis=1)
+filt["hora de salida"]=filt.apply(lambda x: pd.to_datetime(x["hora de salida"])-timedelta(hours=5) if str(x["hora de salida"])!="System.Object[]" else  dt(2050,1,1),axis=1)
 filt["Nombre"]=filt.apply(lambda x: str(x["Nombre"]).strip(),axis=1)
+lista_cambios=[]
 for i in range(filt.shape[0]):
     if filt.loc[i+1,"Rol"]=="Organizer":
         lista_asistentes=[]
         numero_asistentes=filt.loc[i+1,"Numero de participantes"]
         for j in range(1,numero_asistentes):
-            if filt.loc[i+j+1,"Nombre"] in lista_asistentes:
-                #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
-                x=j
+            if filt.loc[i+j+1,"Nombre"] in lista_asistentes and filt.loc[i+j+1,"Nombre"]!="None":
                 numero_cambio=lista_asistentes.index(filt.loc[i+j+1,"Nombre"])+1
-                filt["tiempo conectado"].iloc[i+numero_cambio]=filt.loc[i+1+numero_cambio,"tiempo conectado"]+filt.loc[i+1+j,"tiempo conectado"]
-                filt["hora de ingreso"].iloc[i+numero_cambio]=min(filt.loc[i+1+numero_cambio,"hora de ingreso"],filt.loc[i+1+j,"hora de ingreso"])
-                lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
+                #vamos a considerar los dos casos en los que los intervalos de tiempo no se cruzan, lo cuál representa verdaderamente una desconexión y retorno a la reunión
+                if filt.loc[i+j+1,"hora de ingreso"]<filt.loc[i+numero_cambio+1,"hora de ingreso"]:
+                    if filt.loc[i+j+1,"hora de salida"]<filt.loc[i+numero_cambio+1,"hora de ingreso"]:
+                        #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
+                        
+                        filt["tiempo conectado"].iloc[i+numero_cambio]=filt.loc[i+1+numero_cambio,"tiempo conectado"]+filt.loc[i+1+j,"tiempo conectado"]
+                        filt["hora de ingreso"].iloc[i+numero_cambio]=min(filt.loc[i+1+numero_cambio,"hora de ingreso"],filt.loc[i+1+j,"hora de ingreso"])
+                        lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
+                        lista_cambios.append((i+numero_cambio,i+j))
+                    else:
+                        lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
+                elif filt.loc[i+j+1,"hora de ingreso"]>filt.loc[i+numero_cambio+1,"hora de ingreso"]:
+                    if filt.loc[i+numero_cambio+1,"hora de salida"]<filt.loc[i+j+1,"hora de ingreso"]:
+                        #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
+                        
+                        filt["tiempo conectado"].iloc[i+numero_cambio]=filt.loc[i+1+numero_cambio,"tiempo conectado"]+filt.loc[i+1+j,"tiempo conectado"]
+                        filt["hora de ingreso"].iloc[i+numero_cambio]=min(filt.loc[i+1+numero_cambio,"hora de ingreso"],filt.loc[i+1+j,"hora de ingreso"])
+                        lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
+                        lista_cambios.append((i+numero_cambio,i+j))
+                    else:
+                        lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
+                else:
+                    lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
             else:
                 lista_asistentes.append(filt.loc[i+j+1,"Nombre"])
-
+       
+#vamos a dejar creada la corrección para el caso donde hay desconexiones y 
+# reconexiones de los analistas
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"Rol"]=="Organizer":
+        nombre_comparar=filt.loc[i+1,"Nombre"]
+        correo_comparar=filt.loc[i+1,"Email"]
+        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
+        for j in range(1,numero_asistentes):
+            if filt.loc[i+j+1,"Nombre"]==nombre_comparar and filt.loc[i+j+1,"Email"]==correo_comparar:
+                #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
+                
+                if filt.loc[i+j+1,"hora de ingreso"]<filt.loc[i+1,"hora de ingreso"]:
+                    if filt.loc[i+j+1,"hora de salida"]<filt.loc[i+1,"hora de ingreso"]:
+                        #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
+                        print(i+j,"     ",i)
+                        filt["tiempo conectado"].iloc[i]=filt.loc[i+1,"tiempo conectado"]+filt.loc[i+j+1,"tiempo conectado"]
+                        filt["hora de ingreso"].iloc[i]=min(filt.loc[i+1,"hora de ingreso"],filt.loc[i+j+1,"hora de ingreso"])
+                else:
+                    #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
+                    if filt.loc[i+1,"hora de salida"]<filt.loc[i+j+1,"hora de ingreso"]:
+                        #vamos a ubicar la suma de los tiempos de conexion en la primera aparicion del asistente
+                        print(i+j,"     ",i)
+                        filt["tiempo conectado"].iloc[i]=filt.loc[i+1,"tiempo conectado"]+filt.loc[i+j+1,"tiempo conectado"]
+                        filt["hora de ingreso"].iloc[i]=min(filt.loc[i+1,"hora de ingreso"],filt.loc[i+j+1,"hora de ingreso"])
+                    
+    
 
 
 
@@ -262,7 +312,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -877,7 +926,9 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
         k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=0)
         data['cluster'] = k_means.fit_predict(data_scaled) 
         data["Empresa"]=data_with_names["Empresa"] 
-        data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Llega con retraso, pero no suele faltar" if x["cluster"]==1 else ("Asiste frecuentemente pero sus reuniones tardan mucho tiempo" if x["cluster"]==2 else "Falta con mucha frecuencia")), axis=1)
+        data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Falta con mucha frecuencia" if x["cluster"]==1 else (
+"Llega con  mucho retraso, pero no suele faltar" 
+ if x["cluster"]==2 else "Asiste frecuentemente pero sus reuniones tardan mucho tiempo")), axis=1)
         fig_scatter_emp=px.scatter(recuento_empresas,
             x="tiempo muerto minutos",
             y="reuniones",
@@ -944,6 +995,22 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
             hovertemplate="%{hovertext}<extra></extra>"
         )])
         fig.update_layout(width=1200, height=700)
+        fig.add_trace(go.Scatter3d(
+            x=data["tiempo conectado minutos"][data["Empresa"]==empresa_draw],
+            y=data["tiempo muerto minutos"][data["Empresa"]==empresa_draw],
+            z=data["Porcentaje de faltas"][data["Empresa"]==empresa_draw],
+            marker=dict(color="black", opacity=1),
+            mode='markers',
+            hovertext=data[data["Empresa"]==empresa_draw].apply(
+                lambda row: f"<b>Empresa:</b> {row['Empresa']}<br>"  
+                        f"<b>Clasificación:</b> {row['grupo']}<br>"
+                        f"<b>Tiempo de conexión promedio:</b> {row['tiempo conectado minutos']:.1f} minutos<br>"
+                        f"<b>Tiempo de retraso promedio:</b> {row['tiempo muerto minutos']:.1f} minutos<br>"
+                        f"<b>Ausencias:</b> {row['Porcentaje de faltas']:.1f}%",
+                axis=1
+            ),
+            hovertemplate="%{hovertext}<extra></extra>"
+        ))
 
         return fig_scatter_emp,fig_tac_pro,fig_tac_min,fig
 
@@ -989,7 +1056,9 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
     k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=0)
     data['cluster'] = k_means.fit_predict(data_scaled) 
     data["Empresa"]=data_with_names["Empresa"] 
-    data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Llega con retraso, pero no suele faltar" if x["cluster"]==1 else ("Asiste frecuentemente pero sus reuniones tardan mucho tiempo" if x["cluster"]==2 else "Falta con mucha frecuencia")), axis=1)
+    data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Falta con mucha frecuencia" if x["cluster"]==1 else (
+"Llega con  mucho retraso, pero no suele faltar" 
+ if x["cluster"]==2 else "Asiste frecuentemente pero sus reuniones tardan mucho tiempo")), axis=1)
     fig_scatter_emp=px.scatter(recuento_empresas,
                 x="tiempo muerto minutos",
                 y="reuniones",
@@ -1056,6 +1125,22 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
             hovertemplate="%{hovertext}<extra></extra>"
     )])
     fig.update_layout(width=1200, height=700)
+    fig.add_trace(go.Scatter3d(
+            x=data["tiempo conectado minutos"][data["Empresa"]==empresa_selected],
+            y=data["tiempo muerto minutos"][data["Empresa"]==empresa_selected],
+            z=data["Porcentaje de faltas"][data["Empresa"]==empresa_selected],
+            marker=dict(color="black", opacity=1),
+            mode='markers',
+            hovertext=data.apply(
+                lambda row: f"<b>Empresa:</b> {row['Empresa']}<br>"  
+                        f"<b>Clasificación:</b> {row['grupo']}<br>"
+                        f"<b>Tiempo de conexión promedio:</b> {row['tiempo conectado minutos']:.1f} minutos<br>"
+                        f"<b>Tiempo de retraso promedio:</b> {row['tiempo muerto minutos']:.1f} minutos<br>"
+                        f"<b>Ausencias:</b> {row['Porcentaje de faltas']:.1f}%",
+                axis=1
+            ),
+            hovertemplate="%{hovertext}<extra></extra>"
+        ))
 
     return fig_scatter_emp,fig_tac_pro,fig_tac_min,fig
 
