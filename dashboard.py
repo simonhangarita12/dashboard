@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -312,7 +312,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
@@ -924,24 +923,25 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
         data=recuento_empresas[["tiempo conectado minutos","tiempo muerto minutos","Porcentaje de faltas"]]
         scaler=StandardScaler()
         data_scaled=scaler.fit_transform(data)
-        k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=0)
+        k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=42)
         data['cluster'] = k_means.fit_predict(data_scaled) 
         data["Empresa"]=data_with_names["Empresa"] 
         data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Falta con mucha frecuencia" if x["cluster"]==1 else (
-"Llega con  mucho retraso, pero no suele faltar" 
- if x["cluster"]==2 else "Asiste frecuentemente pero sus reuniones tardan mucho tiempo")), axis=1)
+"Asiste frecuentemente pero sus reuniones tardan mucho tiempo" 
+ if x["cluster"]==2 else "Llega con  mucho retraso, pero no suele faltar" )), axis=1)
         fig_scatter_emp=px.scatter(recuento_empresas,
-            x="tiempo muerto minutos",
-            y="reuniones",
-            hover_data=["Empresa"],
-            title="Dispersion del número de reuniones con respecto al tiempo perdido por impuntualidad",
-            size="inverso tiempo efectivo",
-            labels={"tiempo muerto minutos":"Tiempo de retraso promedio",
+                x="tiempo muerto minutos",
+                y="reuniones",
+                hover_data=["Empresa"],
+                title="Dispersion del número de reuniones con respecto al tiempo perdido por impuntualidad",
+                size="inverso tiempo efectivo",
+                labels={"tiempo muerto minutos":"Tiempo de retraso promedio",
                         "reuniones":"Número de reuniones",
                         "inverso tiempo efectivo":"Porcentaje de tiempo desaprovechado"
-                    },
-            size_max=40,
-            color="color"
+                        },
+                size_max=40,
+                color="color",
+                color_discrete_map={"blue": "blue", "red": "red"}
             )
         fig_scatter_emp.update_layout(width=1200, height=650)
         fig_tac_pro=go.Figure(
@@ -1029,7 +1029,7 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
                 break
     if empresa=="":
         return px.scatter(),px.line(),px.line()
-    
+    empresa=empresa
     empresas_prom=filt.groupby(["Empresa"])[["tiempo muerto inevitable","tiempo conectado asistentes"]].mean().reset_index()
     empresas_prom["tiempo conectado minutos"]=empresas_prom['tiempo conectado asistentes'].dt.total_seconds() // 60+ (empresas_prom['tiempo conectado asistentes'].dt.total_seconds() % 60)/100
     faltas=filt[filt["tiempo conectado asistentes"]<timedelta(minutes=5)]
@@ -1046,7 +1046,6 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
     recuento_empresas["inverso tiempo efectivo"]=101-recuento_empresas["Porcentaje tiempo efectivo"]
     recuento_empresas["tiempo muerto minutos"]=recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() // 60+ (recuento_empresas['tiempo muerto inevitable'].dt.total_seconds() % 60)/100 
     recuento_empresas["color"]=np.where(recuento_empresas["Empresa"]==empresas_dict[empresa], "red","blue")
-    
     #Vamos a entrenar un modelo de Kmeans para determinar la mejor forma de separar las empresas agrupandolas segun su comportamiento.
     from sklearn.preprocessing import StandardScaler
     from sklearn.cluster import KMeans
@@ -1054,12 +1053,13 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
     data=recuento_empresas[["tiempo conectado minutos","tiempo muerto minutos","Porcentaje de faltas"]]
     scaler=StandardScaler()
     data_scaled=scaler.fit_transform(data)
-    k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=0)
+    k_means=KMeans(n_clusters=4, init="k-means++", max_iter=300, n_init=10, random_state=42)
     data['cluster'] = k_means.fit_predict(data_scaled) 
     data["Empresa"]=data_with_names["Empresa"] 
     data["grupo"]=data.apply(lambda x: "Comportamiento normal" if x["cluster"]==0 else ("Falta con mucha frecuencia" if x["cluster"]==1 else (
 "Llega con  mucho retraso, pero no suele faltar" 
  if x["cluster"]==2 else "Asiste frecuentemente pero sus reuniones tardan mucho tiempo")), axis=1)
+    #print(recuento_empresas[recuento_empresas["color"]==])
     fig_scatter_emp=px.scatter(recuento_empresas,
                 x="tiempo muerto minutos",
                 y="reuniones",
@@ -1071,7 +1071,8 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
                         "inverso tiempo efectivo":"Porcentaje de tiempo desaprovechado"
                         },
                 size_max=40,
-                color="color"
+                color="color",
+                color_discrete_map={"blue": "blue", "red": "red"}
             )
     fig_scatter_emp.update_layout(width=1200, height=650)
     fig_tac_pro=go.Figure(
@@ -1127,12 +1128,12 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
     )])
     fig.update_layout(width=1200, height=700)
     fig.add_trace(go.Scatter3d(
-            x=data["tiempo conectado minutos"][data["Empresa"]==empresa_selected],
-            y=data["tiempo muerto minutos"][data["Empresa"]==empresa_selected],
-            z=data["Porcentaje de faltas"][data["Empresa"]==empresa_selected],
+            x=data["tiempo conectado minutos"][data["Empresa"]==empresa.upper()],
+            y=data["tiempo muerto minutos"][data["Empresa"]==empresa.upper()],
+            z=data["Porcentaje de faltas"][data["Empresa"]==empresa.upper()],
             marker=dict(color="black", opacity=1),
             mode='markers',
-            hovertext=data.apply(
+            hovertext=data[data["Empresa"]==empresa.upper()].apply(
                 lambda row: f"<b>Empresa:</b> {row['Empresa']}<br>"  
                         f"<b>Clasificación:</b> {row['grupo']}<br>"
                         f"<b>Tiempo de conexión promedio:</b> {row['tiempo conectado minutos']:.1f} minutos<br>"
@@ -1142,6 +1143,7 @@ def plot_emp(n_click,empresa_draw,empresa_selected):
             ),
             hovertemplate="%{hovertext}<extra></extra>"
         ))
+    
 
     return fig_scatter_emp,fig_tac_pro,fig_tac_min,fig
 
