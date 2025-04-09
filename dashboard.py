@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
+data_horas = pd.read_excel('ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -347,6 +347,7 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
+server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
