@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -47,6 +47,43 @@ def aux_fun_error(email):
 #creamos una nueva columna temporal asignando el valor en 
 # binario de si es el caso de un analista o no
 filt["Es_analista"]= filt.apply(lambda x:aux_fun_error(x["Email"]),axis=1)
+
+#El primer error que se debe arreglar para permitir el arreglo del resto de errores, 
+# es un error que sucede aveces en la extracción de los datos y es que en este caso 
+# muchos datos salen repetidos pero por alguna razon si en la extracción no se puede 
+# traer toda la información estos repetidos no se van a eliminar. 
+# Por tanto se usa el siguiente algoritmo para encargarnos de esto
+
+reunion_actual=filt["MeetingId"].iloc[0]
+lista_eliminar=[]
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"MeetingId"]!=reunion_actual:
+        reunion_actual=filt.loc[i+1,"MeetingId"]
+        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
+        for n in range(1,numero_asistentes):
+            if filt.loc[i+1+n,"MeetingId"]!=reunion_actual:
+                for j in range(0,n):
+                    lista_eliminar.append(i+j+1)
+                break
+for e in lista_eliminar:
+    filt=filt.drop(e)
+filt=filt.reset_index(drop=True)
+filt.index=filt.index+1
+
+
+#A continuacion se corrige el problema de que haya mas de un organizador en la reunion. 
+# Lo cual tiene cierto sentido de forma interna, pero que nos daña los algoritmos siguientes. 
+# Entonces es mejor hacer la corrección rapidamente
+
+reunion_actual=filt["MeetingId"].iloc[0]
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"MeetingId"]!=reunion_actual:
+        reunion_actual=filt.loc[i+1,"MeetingId"]
+        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
+        for n in range(1,numero_asistentes):
+            if filt.loc[i+1+n,"Rol"]!="Presenter":
+                filt.loc[i+1+n,"Rol"]="Presenter"
+
 
 
 #Vamos a arreglar un error que nos encontramos 
@@ -149,7 +186,7 @@ for i in range(filt.shape[0]):
 actual_reunion=filt.loc[1,"MeetingId"]
 lista_actuales=[]
 posicion_ubicar=0
-filt.iloc[0], filt.iloc[1] = filt.iloc[1].copy(), filt.iloc[0].copy()
+
 for i in range(filt.shape[0]):
    if filt.loc[i+1,"MeetingId"]!=actual_reunion:
       actual_reunion=filt.loc[i+1,"MeetingId"]
@@ -516,7 +553,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
