@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -26,7 +26,7 @@ data_horas = data_horas.rename(columns={
 #eliminamos la primera fila, ya que contiene informacion del excel original, que aqui no es relevante
 data_horas=data_horas.drop([0],axis=0)
 #seleccionamos las columnas mas relevantes para el analisis
-filt=data_horas[["Nombre","Numero de participantes","Email","Rol","Empresa","hora de ingreso","hora de salida","duracion planeada","inicio agendado","tiempo conectado"]]
+filt=data_horas[["Nombre","Numero de participantes","Email","Rol","Empresa","hora de ingreso","hora de salida","duracion planeada","inicio agendado","tiempo conectado","MeetingId"]]
 filt=filt.drop_duplicates().reset_index(drop=True)
 filt.index=filt.index+1
 #En esta parte arreglamos un pequeño error en los emails que se nos presenta 
@@ -143,7 +143,39 @@ for i in range(filt.shape[0]):
                         filt["hora de ingreso"].iloc[i]=min(filt.loc[i+1,"hora de ingreso"],filt.loc[i+j+1,"hora de ingreso"])
                     
     
-
+#A continuacion se presenta el algoritmo diseñado para solucionar el
+# problema que sucede cuando el analista no aparece como organizador debido 
+# a que no agendó la reunión.
+actual_reunion=filt.loc[1,"MeetingId"]
+lista_actuales=[]
+posicion_ubicar=0
+filt.iloc[0], filt.iloc[1] = filt.iloc[1].copy(), filt.iloc[0].copy()
+for i in range(filt.shape[0]):
+   if filt.loc[i+1,"MeetingId"]!=actual_reunion:
+      actual_reunion=filt.loc[i+1,"MeetingId"]
+      posible_organizador=""
+      posicion_organizador=0
+      for ele in lista_actuales:
+         if filt.loc[ele,"Rol"]=="Organizer":
+            break
+         else:
+            if filt.loc[ele,"Email"] in dict_nombres_moda.keys():
+               if dict_nombres_moda[filt.loc[ele,"Email"]] == filt.loc[ele,"Nombre"]:
+                  
+                  posible_organizador=filt.loc[ele,"Email"]
+                  posicion_organizador=ele
+                  break
+      if posible_organizador!="":
+          filt["Rol"].iloc[posicion_organizador-1]="Organizer"
+          filt.iloc[posicion_organizador-1],filt.iloc[posicion_ubicar]=filt.iloc[posicion_ubicar].copy(),filt.iloc[posicion_organizador-1].copy()
+      actual_reunion=filt.loc[i+1,"MeetingId"]
+      lista_actuales=[]
+      lista_actuales.append(i+1)
+      posicion_ubicar=i
+   else:
+      lista_actuales.append(i+1)
+      
+filt=filt.drop(columns=["MeetingId"])
 
 
 #creamos nuevas columnas para obtener posteriormente los tiempos muertos por reunion
@@ -174,6 +206,22 @@ for i in range(filt.shape[0]):
 filt["tiempo conectado asistentes"]=filt.apply(lambda x: max(x["tiempos"])if len(x["tiempos"])>0 else 0, axis=1)
 filt["tiempo de entrada inevitable"]=filt.apply(lambda x:x["tiempos inevitables"][x["tiempos"].index(max(x["tiempos"]))]if len(x["tiempos"])>0 else x["hora de ingreso"],axis=1)
 filt=filt.drop(columns=["Es_analista"])  
+
+#A continuacion vamos a hacer un pequeño parche en la información para tratar el caso  
+# en que la información de un organizador nos sale como un system object. 
+# Lo cual evita que la reunión aparezca en las visualizaciones 
+# a pesar de que aún nos podría aportar información valiosa.
+
+filt["manipular hora"]=1
+for i in range(filt.shape[0]):
+    if filt.loc[i+1,"Rol"]=="Organizer" and filt.loc[i+1,"hora de ingreso"]<dt(1991,1,1):
+        numero_asistentes=filt.loc[i+1,"Numero de participantes"]
+        for j in range(1,numero_asistentes):
+            if filt.loc[i+j+1,"hora de ingreso"]>dt(1991,1,1):
+                filt["hora de ingreso"].iloc[i]=filt["hora de ingreso"].iloc[i+j]
+                filt["manipular hora"].iloc[i]=0
+                break
+
 #seleccionamos unicamente a los organizadores de las reuniones, 
 # ya que dentro de esto se van a encontrar todas las reuniones de los analistas
 filt=filt[filt["Rol"]=="Organizer"]
@@ -232,12 +280,13 @@ filt=filt[filt["inicio agendado"]<fecha]
 #  como por ejemplo saber cual es el tiempo muerto que se presentó durante la reunión,
 #  o cual fue el tiempo perdido debido a impuntualidad de los asistentes, etc.
 filt["hora de inicio"]=0
-filt["tiempo muerto inevitable"]=filt.apply(lambda x: x["tiempo de entrada inevitable"]-x["hora de ingreso"] if (x["tiempo de entrada inevitable"]!=timedelta(0)and x["hora de ingreso"]!=dt(1990,1,1) and x["hora de ingreso"]<x["tiempo de entrada inevitable"]) else timedelta(0),axis=1)
+filt["tiempo muerto inevitable"]=filt.apply(lambda x: x["tiempo de entrada inevitable"]-x["hora de ingreso"] if (x["tiempo de entrada inevitable"]!=timedelta(0)and x["manipular hora"]==1 and x["hora de ingreso"]<x["tiempo de entrada inevitable"]) else timedelta(0),axis=1)
 filt["hora de inicio"]=filt.apply(lambda x: x["inicio agendado"].hour,axis=1)
 filt["tiempo muerto"]=filt.apply(lambda x: x["tiempo conectado"]-x["tiempo conectado asistentes"] if (int(x["tiempo conectado asistentes"].total_seconds() // 60 % 60)>0  and x["tiempo conectado"]>x["tiempo conectado asistentes"] )else timedelta(0),axis=1)
 filt["diferencia tiempo"]=filt.apply(lambda x: int((x["duracion planeada"]-x["tiempo conectado"]).total_seconds() // 60 % 60) if x["duracion planeada"]>x["tiempo conectado"] else -int((x["tiempo conectado"]-x["duracion planeada"]).total_seconds() // 60 % 60),axis=1)
 filt=filt.drop(columns=["tiempo de entrada inevitable"])
 filt["tiempo muerto real"]=filt.apply(lambda x: x["tiempo muerto"]-x["tiempo muerto inevitable"] if x["tiempo muerto"]>x["tiempo muerto inevitable"] else timedelta(0),axis=1)
+
 
 #Elimina los valores repetidos. Es decir, cuando dos filas son iguales en todo
 filt=filt.drop_duplicates()
@@ -257,32 +306,152 @@ filt["Empresa"]=filt.apply(lambda x:"ASESORÍA MINERA" if x["Empresa"]=='ASESORI
 
 #Eliminamos los terminos que nos aportan poco al nombre de la empresa
 def eliminar_palabras(nombre_empresa):
+    #Con esta funcion se debe tener cuidado, ya que se pueden borrar o modificar elementos que no deben ser alterados, 
+    # por tanto los reemplazos de cadenas de texto solo se van a hacer con cadenas grandes
+    nombre_empresa = " ".join(nombre_empresa.split())
     nombre_empresa=nombre_empresa.replace("ASESORIAS","")
     nombre_empresa=nombre_empresa.replace("ASESORIA","")
     nombre_empresa=nombre_empresa.replace("SISTEGRA","")
     nombre_empresa=nombre_empresa.replace("-","")
     nombre_empresa=nombre_empresa.replace("PESV","")
+    nombre_empresa=nombre_empresa.replace("SG","")
     nombre_empresa=nombre_empresa.replace("SST","")
     nombre_empresa=nombre_empresa.replace(".","")
     nombre_empresa=nombre_empresa.replace(",","")
+    nombre_empresa=nombre_empresa.replace("(","")
+    nombre_empresa=nombre_empresa.replace(")","")
+    #####Esto posiblemente haya que eliminarlo en caso de que hayan empresas con el nombre de algun mes
+    nombre_empresa=nombre_empresa.replace("ENERO","")
+    nombre_empresa=nombre_empresa.replace("FEBRERO","")
+    nombre_empresa=nombre_empresa.replace("MARZO","")
+    nombre_empresa=nombre_empresa.replace("ABRIL","")
+    nombre_empresa=nombre_empresa.replace("MAYO","")
+    nombre_empresa=nombre_empresa.replace("JUNIO","")
+    nombre_empresa=nombre_empresa.replace("JULIO","")
+    nombre_empresa=nombre_empresa.replace("AGOSTO","")
+    nombre_empresa=nombre_empresa.replace("SEPTIEMBRE","")
+    nombre_empresa=nombre_empresa.replace("NOVIEMBRE","")
+    nombre_empresa=nombre_empresa.replace("DICIEMBRE","")
+    #####
+    nombre_empresa=nombre_empresa.replace("(","")
+    nombre_empresa=nombre_empresa.replace(")","")
+    nombre_empresa=nombre_empresa.replace("[","")
+    nombre_empresa=nombre_empresa.replace("]","")
+    nombre_empresa = " ".join(nombre_empresa.split())
     nombre_empresa=nombre_empresa.replace("1CASTROTCHERASSI","CASTROTCHERASSI")
+    nombre_empresa=nombre_empresa.replace("ACEROS Y CASETAS","ACEROS CASETAS Y CONSTRUCCIONES SAS")
+    nombre_empresa=nombre_empresa.replace("AIRE SMART","AIRE SMART SAS")
+    nombre_empresa=nombre_empresa.replace("AIRE SMART SAS SAS","AIRE SMART SAS")
+    nombre_empresa=nombre_empresa.replace("AIRE SMART S A S","AIRE SMART SAS")
+    nombre_empresa=nombre_empresa.replace("AGENCIA DE ADUANAS","AGENCIA DE ADUANAS ASIMCOMEX SAS NIVEL 1")
+    nombre_empresa=nombre_empresa.replace("AGENCIA DE ADUANAS ASIMCOMEX SAS NIVEL 1 ASIMCOMEX SAS NIVEL 1","AGENCIA DE ADUANAS ASIMCOMEX SAS NIVEL 1")
+    nombre_empresa=nombre_empresa.replace("EN SEGURIDAD Y SALUD EN EL TRABAJO","")
+    nombre_empresa=nombre_empresa.replace("CLIENTE NUEVO","")
+    nombre_empresa=nombre_empresa.replace("COMPANIA MINERA COLOMBO/AMERICANA","COMPANIA MINERA COLOMBO AMERICANA DE CARBON SAS")
+    nombre_empresa=nombre_empresa.replace("DISTRIAROMAS","DISTRIAROMAS DE COLOMBIA SAS")
+    nombre_empresa=nombre_empresa.replace("DISTRIAROMAS DE COLOMBIA SAS DE COLOMBIA SAS","DISTRIAROMAS DE COLOMBIA SAS")
+    nombre_empresa=nombre_empresa.replace("EKIRAA","EKIRAA DISTRIBUCIONES SAS")
+    nombre_empresa=nombre_empresa.replace("EKIRAA DISTRIBUCIONES SAS DISTRIBUCIONES SAS","EKIRAA DISTRIBUCIONES SAS")
+    nombre_empresa=nombre_empresa.replace("EXPERTO IP","EXPERTOS IP")
+    nombre_empresa=nombre_empresa.replace("FREUVER DEL CAMPO","FRUVER DEL CAMPO")
+    nombre_empresa=nombre_empresa.replace("G I GLOBAL INDUSTRIAL","G I GLOBAL INDUSTRIAL LTDA")
+    nombre_empresa=nombre_empresa.replace("G I GLOBAL INDUSTRIAL LTDA LTDA","G I GLOBAL INDUSTRIAL LTDA")
+    nombre_empresa=nombre_empresa.replace("HIDRAULICA Y SELLADOS","HIDRAULICA Y SELLADOS LTDA")
+    nombre_empresa=nombre_empresa.replace("HIDRAULICA Y SELLADOS LTDA LTDA","HIDRAULICA Y SELLADOS LTDA")
+    nombre_empresa=nombre_empresa.replace("IMQUIRURJICOS","IMQUIRURGICOS SAS")
+    nombre_empresa=nombre_empresa.replace("INTERSERVIS","INTERSERVIS LTDA")
+    nombre_empresa=nombre_empresa.replace("INTERSERVIS LTDA LTDA","INTERSERVIS LTDA")
+    nombre_empresa=nombre_empresa.replace("INVERSIONES PLUS LS","INVERSIONES PLUS LS SAS")
+    nombre_empresa=nombre_empresa.replace("INVERSIONES PLUS LS SAS SAS","INVERSIONES PLUS LS SAS")
+    nombre_empresa=nombre_empresa.replace("MACIZO TEC","MACIZO TEC SAS")
+    nombre_empresa=nombre_empresa.replace("MACIZO TEC SAS SAS","MACIZO TEC SAS")
+    nombre_empresa=nombre_empresa.replace("MERKUR GAMING","MERKUR GAMING COLOMBIA SAS")
+    nombre_empresa=nombre_empresa.replace("MERKUR GAMING COLOMBIA SAS COLOMBIA SAS","MERKUR GAMING COLOMBIA SAS")
+    nombre_empresa=nombre_empresa.replace("MERKUR","MERKUR GAMING COLOMBIA SAS")
+    nombre_empresa=nombre_empresa.replace("MERKUR GAMING COLOMBIA SAS GAMING COLOMBIA SAS","MERKUR GAMING COLOMBIA SAS")
+    nombre_empresa=nombre_empresa.replace("MONET REPROGRAMACION","MONET COLOMBIA SAS")
+    nombre_empresa=nombre_empresa.replace("CADA 15 DIAS","")
+    nombre_empresa=nombre_empresa.replace("REUNION SEMANAL","")
+    nombre_empresa=nombre_empresa.replace("SERVICIO DE GRUA Y TALLER LOS ESPECIALISTAS","SERVICIO DE GRUA Y TALLER LOS ESPECIALISTAS MULTIMARCAS")
+    nombre_empresa=nombre_empresa.replace("SERVICIO DE GRUA Y TALLER LOS ESPECIALISTAS MULTIMARCAS MULTIMARCAS","SERVICIO DE GRUA Y TALLER LOS ESPECIALISTAS MULTIMARCAS")
+    nombre_empresa=nombre_empresa.replace("SERVICIOS DOCUMENTALES","SERVICIOS DOCUMENTALES SAS")
+    nombre_empresa=nombre_empresa.replace("SERVICIOS DOCUMENTALES SAS SAS","SERVICIOS DOCUMENTALES SAS")
+    nombre_empresa=nombre_empresa.replace("AGENCIA SIERRA","AGENCIA SIERRA SEGUROS")
+    nombre_empresa=nombre_empresa.replace("AGENCIA SIERRA SEGUROS SEGUROS","AGENCIA SIERRA SEGUROS")
+    nombre_empresa=nombre_empresa.replace("TECHNICE SERVICE","TECHNIC SERVICE")
+    nombre_empresa=nombre_empresa.replace("TECHNISERVICE","TECHNIC SERVICE")
+    nombre_empresa=nombre_empresa.replace("SOLAIR","SOLAIR PLUS")
+    nombre_empresa=nombre_empresa.replace("SOLAIR PLUS PLUS","SOLAIR PLUS")
+    nombre_empresa=nombre_empresa.replace("SUMMARED","SUMMA RED SAS")
+    nombre_empresa=nombre_empresa.replace("SYTCERCO","SYTCERCO SERVICIOS Y TALENTO CERTIFICADO DE LA COSTA SAS")
+    nombre_empresa=nombre_empresa.replace("SYTCERCO SERVICIOS Y TALENTO CERTIFICADO DE LA COSTA SAS SERVICIOS Y TALENTO CERTIFICADO DE LA COSTA SAS","SYTCERCO SERVICIOS Y TALENTO CERTIFICADO DE LA COSTA SAS")
+    nombre_empresa=nombre_empresa.replace("TALENTO CONSULTORES","")
+    nombre_empresa=nombre_empresa.replace("TECHNIC SERVICE","TECHNIC SERVICE LTDA")
+    nombre_empresa=nombre_empresa.replace("TECHNIC SERVICE LTDA LTDA","TECHNIC SERVICE LTDA")
+    nombre_empresa=nombre_empresa.replace("TECHNOLOGY AND SISTEMS","TECHNOLOGY AND SYSTEMS INDUSTRIES SAS")
+    nombre_empresa=nombre_empresa.replace("TECHNOLOGY AND SISTEMS INDUSTRIES SAS INDUSTRIES SAS","TECHNOLOGY AND SYSTEMS INDUSTRIES SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTE SEGURO ESPECIALIZADO","TRANSPORTE SEGURO ESPECIALIZADO SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTE SEGURO ESPECIALIZADO SAS SAS","TRANSPORTE SEGURO ESPECIALIZADO SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTES ONIKA","TRANSPORTES ONIKA EXPRESS SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTES ONIKA EXPRESS SAS EXPRESS SAS","TRANSPORTES ONIKA EXPRESS SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTES ONIKA EXPRESS SAS EXPRESS","TRANSPORTES ONIKA EXPRESS SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTES QE ASEOSRIA","TRANSPORTES QE SAS")
+    nombre_empresa=nombre_empresa.replace("UNIDAD OSTEOPOROSIS","UNIDAD DE OSTEOPOROSIS SAS")
+    nombre_empresa=nombre_empresa.replace("AGENCIA DE ADUANAS ASIMCOMEX SAS NIVEL 1 ASIMCOMEX SAS NIVEL 1 ASIMCOMEX SAS NIVEL 1","AGENCIA DE ADUANAS ASIMCOMEX SAS NIVEL 1 ASIMCOMEX SAS NIVEL 1")
+    nombre_empresa=nombre_empresa.replace("AIRE SMART SAS S A S","AIRE SMART SAS")
+    nombre_empresa=nombre_empresa.replace("ASASORIA","")
+    nombre_empresa=nombre_empresa.replace("ASEORIA","")
+    nombre_empresa=nombre_empresa.replace("ASESORIE","")
+    nombre_empresa=nombre_empresa.replace("ASEOSRIA","")
+    nombre_empresa=nombre_empresa.replace("ASESRIA","")
+    nombre_empresa=nombre_empresa.replace("BIOPLUS","BIOPLUS MEDICAL CARE SAS")
+    nombre_empresa=nombre_empresa.replace("BIOPLUS MEDICAL CARE SAS MEDICAL CARE SAS","BIOPLUS MEDICAL CARE SAS")
+    nombre_empresa=nombre_empresa.replace("CALZAEMPRESAS","CALZAEMPRESAS SAS")
+    nombre_empresa=nombre_empresa.replace("CALZAEMPRESAS SAS SAS","CALZAEMPRESAS SAS")
+    nombre_empresa=nombre_empresa.replace("REUNION INICIAL","")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTANDO AM","TRANSPORTANDO AM LOGISTICA INTEGRAL SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTANDO AM LOGISTICA INTEGRAL SAS LOGISTICA INTEGRAL SAS","TRANSPORTANDO AM LOGISTICA INTEGRAL SAS")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTES URBANO RIONEGRO","TRANSPORTES URBANO RIONEGRO SA")
+    nombre_empresa=nombre_empresa.replace("TRANSPORTES URBANO RIONEGRO SA SA","TRANSPORTES URBANO RIONEGRO SA")
+    nombre_empresa=nombre_empresa.replace("CLUB CAMPESTRE DE PEREIRA","CORPORACION CLUB CAMPESTRE DE PEREIRA")
+    nombre_empresa=nombre_empresa.replace("CORPORACION CLUB CAMPESTRE DE PEREIRA CLUB CAMPESTRE DE PEREIRA","CORPORACION CLUB CAMPESTRE DE PEREIRA")
+    nombre_empresa=nombre_empresa.replace("COMPANIA MINERA COLOMBO DE CARBON","COMPANIA MINERA COLOMBO AMERICANA DE CARBON SAS")
+    nombre_empresa=nombre_empresa.replace("COMPANIA MINERA COLOMBO DE CARBON AMERICANA DE CARBON SAS AMERICANA DE CARBON SAS","COMPANIA MINERA COLOMBO AMERICANA DE CARBON SAS")
+    nombre_empresa=nombre_empresa.replace("IMPACT HUB SAS","FUNDACION IMPACT HUB")
+    nombre_empresa=nombre_empresa.replace("INDISTRIAS CHEMICAL SUPERIOR SAS","INDUSTRIAS CHEMICAL SUPERIOR SAS")
+    nombre_empresa=nombre_empresa.replace("AMERICAN ROLLERS","LABORAL AMERICAN ROLLER")
+    nombre_empresa=nombre_empresa.replace("REUNION DE DIAGNOSTICO LOPETRANS SAS","LOPETRANS SAS")
+    nombre_empresa=nombre_empresa.replace("VIRTUAL A EMPRESA AWAKE DANIELA RAMIREZ","AWAKE DANIELA RAMIREZ")
+    nombre_empresa=nombre_empresa.replace("VIRTUAL EMPRESA AWAKE DANIELA RAMIREZ","AWAKE DANIELA RAMIREZ")
+    nombre_empresa=nombre_empresa.replace("VIRTUAL A DROGUERIA SAPAQ MIRANDA","DROGUERIA SAPAQ")
+    nombre_empresa=nombre_empresa.replace("VIRTUAL EMPRESA DROGUERIA SAPAQ","DROGUERIA SAPAQ")
     nombre_empresa=nombre_empresa.replace("2025","")
-    nombre_empresa=nombre_empresa.replace("360","TRES SESENTA")
-    nombre_empresa=nombre_empresa.replace("28","")
     nombre_empresa = " ".join(nombre_empresa.split())
     return nombre_empresa
-filt["Empresa"]=filt.apply(lambda x:eliminar_palabras(x["Empresa"]),axis=1)
-#Colocamos sin especificar para el nombre de las empresas 
-# que no tenian un nombre significativo
-filt["Empresa"]=filt.apply(lambda x:"Sin especificar" if x["Empresa"]=="" else x["Empresa"],axis=1)
-
 #hacemos un poquito de limpieza en los nombres de las empresas 
 # para que sean mas claros y ademas eliminemos facilmente empresas 
 # que no nos aportan información. Como es el caso de las reuniones 
 # donde no aparece el nombre de la empresa y por tanto es informacion 
 # que no nos aporta mucho en las visualizaciones
 filt["Empresa"]=filt.apply(lambda x: x["Empresa"].upper(), axis=1)
+filt["Empresa"]=filt.apply(lambda x:eliminar_palabras(x["Empresa"]),axis=1)
+#Colocamos sin especificar para el nombre de las empresas 
+# que no tenian un nombre significativo
+filt["Empresa"]=filt.apply(lambda x:"SIN ESPECIFICAR" if x["Empresa"]=="" else x["Empresa"],axis=1)
+#ademas se corrigen los nombres de empresas que no pudimos unificar en la funcion anterior para no dañar otros datos
 
+
+filt["Empresa"]=filt.apply(lambda x:"DBSOFT SAS" if x["Empresa"]=="DB" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"TRAZADO INMOBILIARIO" if x["Empresa"]=="TRAZADO" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"LONA GROUP" if x["Empresa"]=="LONA" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"EDS LA PERLA" if x["Empresa"]=="EDS" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"AG CONSULTING SAS" if x["Empresa"]=="A+G CONSULTING" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"TRANSPORTES QE SAS" if x["Empresa"]=="TRANSPORTES QE" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"DE PANIFICADORA MIPAN COLOMBIA SAS" if x["Empresa"]=="DE PANIFICADORA MIPAN COLOMBIA" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"28 INOVA" if x["Empresa"]=="PLATAFORMA INOVA" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"ED YARUMOS" if x["Empresa"]=="YARUMOS" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"EDS TAMESIS" if x["Empresa"]=="TAMESIS" else x["Empresa"],axis=1)
+filt["Empresa"]=filt.apply(lambda x:"INVERSIONES TRT" if x["Empresa"]=="TRT" else x["Empresa"],axis=1)
 #agregamos una variable nueva para hacer recuento de reuniones
 filt["reuniones"]=1
 
@@ -347,7 +516,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
