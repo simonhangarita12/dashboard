@@ -2,7 +2,7 @@
 import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
-data_horas = pd.read_excel('ensayo.xlsx')
+data_horas = pd.read_excel('archivo_analisis/ensayo.xlsx')
 data_horas = data_horas.rename(columns={
     'Resumen de Organizadores': 'MeetingId',
     'Unnamed: 1': "Numero de participantes",
@@ -44,9 +44,17 @@ def aux_fun_error(email):
         return 1
     else:
         return 0
-#creamos una nueva columna temporal asignando el valor en 
-# binario de si es el caso de un analista o no
+    
+#Ademas en las conexiones aveces hay presentes ai notetaker de alguna forma por tanto 
+# intentaremos a su vez ponerlos como analistas, ya que en realidad no cuentan como un 
+# asistente de la empresa externa y pueden incluir muchas reuniones que en verdad no se 
+# han dado como reuniones efectivas.
+patron_ai  = r"AI Notetaker"
+
+#creamos una nueva columna temporal asignando el valor en binario de si es el caso de un analista o no
 filt["Es_analista"]= filt.apply(lambda x:aux_fun_error(x["Email"]),axis=1)
+filt["Es_ia"]=filt.apply(lambda x:1 if re.search(patron_ai,x["Nombre"]) else 0,axis=1)
+filt["Es_ia"]=filt.apply(lambda x:1 if x["Nombre"]=="read.ai meeting notes" else x["Es_ia"],axis=1)
 
 #El primer error que se debe arreglar para permitir el arreglo del resto de errores, 
 # es un error que sucede aveces en la extracción de los datos y es que en este caso 
@@ -99,13 +107,21 @@ for i in range(filt.shape[0]):
 from statistics import mode
 llaves=list(dict_nombres.keys())
 dict_nombres_moda={correo:mode(dict_nombres[correo]) for correo in llaves}
+lista_revisar=[]
 for i in range(filt.shape[0]):
-    if filt.loc[i+1,"Rol"]=="Organizer":
+    if filt.loc[i+1,"Rol"]=="Organizer" :
         numero_asistentes=filt.loc[i+1,"Numero de participantes"]
-        for j in range(1,numero_asistentes+1):
-            if filt.loc[i+j,"Es_analista"]==1:
-                if dict_nombres_moda[filt.loc[i+j,"Email"]] != filt.loc[i+j,"Nombre"]:
-                    filt.loc[i+j,"Es_analista"]=0
+        for j in range(1,numero_asistentes):
+            if filt.loc[i+j+1,"Es_analista"]==1:
+                if dict_nombres_moda[filt.loc[i+j+1,"Email"]] != filt.loc[i+j+1,"Nombre"]:
+                    filt.loc[i+j+1,"Es_analista"]=0
+                    #En el caso de Claudia, ya confirme con ella que el problema en su caso sucede por conectarse muchas veces con varios dispositivos al tiempo
+                else:
+                    lista_revisar.append((i,i+j+1))
+                    
+filt["Es_analista"] = filt.apply(lambda x: 1 if x["Es_ia"] == 1 else x["Es_analista"], axis=1)
+filt=filt.drop(columns=["Es_ia"])    
+filt[filt["Nombre"].str.contains("AI Notetaker")] 
 
  #Se arregla el error de que una persona se desconecta y se vuelta a conectar 
  # varias veces en la reunion. Lo cual dañaba los tiempos para el analisis 
@@ -553,7 +569,6 @@ import re
 import plotly.graph_objects as go
 import numpy as np
 app=Dash(__name__,external_stylesheets=[dbc.themes.BOOTSTRAP],suppress_callback_exceptions=True)
-server=app.server
 layout_heat_map=dbc.Container([
     dbc.Row([
         dbc.Col([
